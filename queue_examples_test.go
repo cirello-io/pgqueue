@@ -66,7 +66,7 @@ func Example_largeMessage() {
 		log.Fatalln("cannot create queue table:", err)
 	}
 	content := bytes.Repeat([]byte{0}, pgqueue.MaxMessageLength+1)
-	err = queue.Push("queue-name", content)
+	err = queue.Push("queue-large-message", content)
 	fmt.Println("err:", err)
 	// Output:
 	// err: message is too large
@@ -77,8 +77,8 @@ func Example_listen() {
 	if err != nil {
 		log.Fatalln("cannot open database connection:", err)
 	}
-	go queue.Push("queue-name", []byte("content"))
-	watch := queue.Watch("queue-name")
+	go queue.Push("queue-listen", []byte("content"))
+	watch := queue.Watch("queue-listen")
 	for watch.Next() {
 		fmt.Printf("msg: %s\n", watch.Message())
 		queue.Close()
