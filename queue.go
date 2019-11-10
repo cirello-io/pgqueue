@@ -208,7 +208,15 @@ func (q *Queue) Watch(target string) *Watcher {
 }
 
 func (w *Watcher) Next() bool {
+	if w.err != nil {
+		return false
+	}
 	for {
+		msg, err := w.queue.Pop(w.target)
+		if err == nil {
+			w.msg = msg
+			return true
+		}
 		select {
 		case _, ok := <-w.queue.listener.Notify:
 			if !ok {
