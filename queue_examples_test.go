@@ -17,7 +17,6 @@ import (
 	"bytes"
 	"fmt"
 	"log"
-	"time"
 
 	"cirello.io/pgqueue"
 	_ "github.com/lib/pq"
@@ -78,10 +77,7 @@ func Example_listen() {
 	if err != nil {
 		log.Fatalln("cannot open database connection:", err)
 	}
-	go func() {
-		time.Sleep(2 * time.Second)
-		queue.Push("queue-name", []byte("content"))
-	}()
+	go queue.Push("queue-name", []byte("content"))
 	watch := queue.Watch("queue-name")
 	for watch.Next() {
 		fmt.Printf("msg: %s\n", watch.Message())
