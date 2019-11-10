@@ -16,6 +16,7 @@ package pgqueue
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -73,6 +74,23 @@ func (q *Queue) tx(ctx context.Context) (*sql.Tx, error) {
 	})
 }
 
+func (q *Queue) retry(f func() error) error {
+	const serializationErrorCode = "40001"
+	var err error
+	for {
+		err = f()
+		if err == nil {
+			return nil
+		}
+		var pqErr *pq.Error
+		serializationRetry := errors.As(err, &pqErr) && pqErr.Code == serializationErrorCode
+		if !serializationRetry {
+			break
+		}
+	}
+	return err
+}
+
 // CreateTable prepares the underlying table for the queue system.
 func (q *Queue) CreateTable() error {
 	ctx := context.TODO()
@@ -102,24 +120,26 @@ func (q *Queue) Push(target string, content []byte) error {
 	if err := validate(content); err != nil {
 		return err
 	}
-	ctx := context.TODO()
-	tx, err := q.tx(ctx)
-	if err != nil {
-		return fmt.Errorf("cannot create transaction for message push: %w", err)
-	}
-	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `INSERT INTO `+pq.QuoteIdentifier(q.tableName)+` (queue, state, content) VALUES ($1, $2, $3)`, target, New, content)
-	if err != nil {
-		return fmt.Errorf("cannot store message: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("cannot commit message push transaction: %w", err)
-	}
-	_, err = q.db.ExecContext(ctx, `NOTIFY `+pq.QuoteIdentifier(target))
-	if err != nil {
-		return fmt.Errorf("cannot send push notification: %w", err)
-	}
-	return nil
+	return q.retry(func() error {
+		ctx := context.TODO()
+		tx, err := q.tx(ctx)
+		if err != nil {
+			return fmt.Errorf("cannot create transaction for message push: %w", err)
+		}
+		defer tx.Rollback()
+		_, err = tx.ExecContext(ctx, `INSERT INTO `+pq.QuoteIdentifier(q.tableName)+` (queue, state, content) VALUES ($1, $2, $3)`, target, New, content)
+		if err != nil {
+			return fmt.Errorf("cannot store message: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("cannot commit message push transaction: %w", err)
+		}
+		_, err = q.db.ExecContext(ctx, `NOTIFY `+pq.QuoteIdentifier(target))
+		if err != nil {
+			return fmt.Errorf("cannot send push notification: %w", err)
+		}
+		return nil
+	})
 }
 
 // ErrEmptyQueue indicates there isn't any message available at the head of the
@@ -129,29 +149,30 @@ var ErrEmptyQueue = fmt.Errorf("empty queue")
 // Pop retrieves the pending message from the queue, if any available. If the
 // queue is empty, it returns ErrEmptyQueue.
 func (q *Queue) Pop(target string) ([]byte, error) {
-	ctx := context.TODO()
-	tx, err := q.tx(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("cannot create transaction for message pop: %w", err)
-	}
-	defer tx.Rollback()
-	row := tx.QueryRowContext(ctx, `SELECT id, content FROM `+pq.QuoteIdentifier(q.tableName)+` WHERE state = $1`, New)
-	var (
-		id      uint64
-		content []byte
-	)
-	if err := row.Scan(&id, &content); err != nil && err != sql.ErrNoRows {
-		return nil, fmt.Errorf("cannot read message: %w", err)
-	} else if err == sql.ErrNoRows {
-		return nil, ErrEmptyQueue
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE `+pq.QuoteIdentifier(q.tableName)+` SET state = $1 WHERE id = $2`, Done, id); err != nil {
-		return nil, fmt.Errorf("cannot store message: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("cannot commit message pop transaction: %w", err)
-	}
-	return content, nil
+	var content []byte
+	err := q.retry(func() error {
+		ctx := context.TODO()
+		tx, err := q.tx(ctx)
+		if err != nil {
+			return fmt.Errorf("cannot create transaction for message pop: %w", err)
+		}
+		defer tx.Rollback()
+		row := tx.QueryRowContext(ctx, `SELECT id, content FROM `+pq.QuoteIdentifier(q.tableName)+` WHERE state = $1 LIMIT 1`, New)
+		var id uint64
+		if err := row.Scan(&id, &content); err != nil && err != sql.ErrNoRows {
+			return fmt.Errorf("cannot read message: %w", err)
+		} else if err == sql.ErrNoRows {
+			return ErrEmptyQueue
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE `+pq.QuoteIdentifier(q.tableName)+` SET state = $1 WHERE id = $2`, Done, id); err != nil {
+			return fmt.Errorf("cannot store message: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("cannot commit message pop transaction: %w", err)
+		}
+		return nil
+	})
+	return content, err
 }
 
 // ErrMessageTooLarge indicates the content to be pushed is too large.

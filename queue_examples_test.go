@@ -23,7 +23,7 @@ import (
 )
 
 func Example_basic() {
-	queue, err := pgqueue.Open("postgres://postgres:mysecretpassword@localhost:5412/postgres?sslmode=disable")
+	queue, err := pgqueue.Open(*dsn)
 	if err != nil {
 		log.Fatalln("cannot open database connection:", err)
 	}
@@ -44,7 +44,7 @@ func Example_basic() {
 }
 
 func Example_emptyQueue() {
-	queue, err := pgqueue.Open("postgres://postgres:mysecretpassword@localhost:5412/postgres?sslmode=disable")
+	queue, err := pgqueue.Open(*dsn)
 	if err != nil {
 		log.Fatalln("cannot open database connection:", err)
 	}
@@ -58,7 +58,7 @@ func Example_emptyQueue() {
 }
 
 func Example_largeMessage() {
-	queue, err := pgqueue.Open("postgres://postgres:mysecretpassword@localhost:5412/postgres?sslmode=disable")
+	queue, err := pgqueue.Open(*dsn)
 	if err != nil {
 		log.Fatalln("cannot open database connection:", err)
 	}
@@ -73,7 +73,7 @@ func Example_largeMessage() {
 }
 
 func Example_listen() {
-	queue, err := pgqueue.Open("postgres://postgres:mysecretpassword@localhost:5412/postgres?sslmode=disable")
+	queue, err := pgqueue.Open(*dsn)
 	if err != nil {
 		log.Fatalln("cannot open database connection:", err)
 	}
