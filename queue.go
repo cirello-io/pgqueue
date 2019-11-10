@@ -191,6 +191,8 @@ func validate(content []byte) error {
 	return nil
 }
 
+// Watcher holds the pointer necessary to listen for postgreSQL events that
+// indicates a new message has arrive in the pipe.
 type Watcher struct {
 	target string
 	queue  *Queue
@@ -198,6 +200,7 @@ type Watcher struct {
 	err    error
 }
 
+// Watch observes new messages for the target queue.
 func (q *Queue) Watch(target string) *Watcher {
 	watcher := &Watcher{
 		target: target,
@@ -207,6 +210,7 @@ func (q *Queue) Watch(target string) *Watcher {
 	return watcher
 }
 
+// Next waits for the next message to arrive and store it into Watcher.
 func (w *Watcher) Next() bool {
 	if w.err != nil {
 		return false
@@ -234,10 +238,12 @@ func (w *Watcher) Next() bool {
 	}
 }
 
+// Message returns the current message store in the Watcher.
 func (w *Watcher) Message() []byte {
 	return w.msg
 }
 
+// Err holds the last known error that might have happened in Watcher lifespan.
 func (w *Watcher) Err() error {
 	return w.err
 }
