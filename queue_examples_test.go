@@ -14,21 +14,20 @@
 package pgqueue_test
 
 import (
-	"database/sql"
+	"bytes"
 	"fmt"
 	"log"
+	"time"
 
 	"cirello.io/pgqueue"
 	_ "github.com/lib/pq"
 )
 
 func Example_basic() {
-	db, err := sql.Open("postgres", "postgres://postgres:mysecretpassword@localhost:5412/postgres?sslmode=disable")
+	queue, err := pgqueue.Open("postgres://postgres:mysecretpassword@localhost:5412/postgres?sslmode=disable")
 	if err != nil {
-		log.Fatalln("cannot dial to the database:", err)
+		log.Fatalln("cannot open database connection:", err)
 	}
-	defer db.Close()
-	queue := pgqueue.Open(db)
 	if err := queue.CreateTable(); err != nil {
 		log.Fatalln("cannot create queue table:", err)
 	}
@@ -46,12 +45,10 @@ func Example_basic() {
 }
 
 func Example_emptyQueue() {
-	db, err := sql.Open("postgres", "postgres://postgres:mysecretpassword@localhost:5412/postgres?sslmode=disable")
+	queue, err := pgqueue.Open("postgres://postgres:mysecretpassword@localhost:5412/postgres?sslmode=disable")
 	if err != nil {
-		log.Fatalln("cannot dial to the database:", err)
+		log.Fatalln("cannot open database connection:", err)
 	}
-	defer db.Close()
-	queue := pgqueue.Open(db)
 	if err := queue.CreateTable(); err != nil {
 		log.Fatalln("cannot create queue table:", err)
 	}
@@ -59,4 +56,40 @@ func Example_emptyQueue() {
 	fmt.Println("err:", err)
 	// Output:
 	// err: empty queue
+}
+
+func Example_largeMessage() {
+	queue, err := pgqueue.Open("postgres://postgres:mysecretpassword@localhost:5412/postgres?sslmode=disable")
+	if err != nil {
+		log.Fatalln("cannot open database connection:", err)
+	}
+	if err := queue.CreateTable(); err != nil {
+		log.Fatalln("cannot create queue table:", err)
+	}
+	content := bytes.Repeat([]byte{0}, pgqueue.MaxMessageLength+1)
+	err = queue.Push("queue-name", content)
+	fmt.Println("err:", err)
+	// Output:
+	// err: message is too large
+}
+
+func Example_listen() {
+	queue, err := pgqueue.Open("postgres://postgres:mysecretpassword@localhost:5412/postgres?sslmode=disable")
+	if err != nil {
+		log.Fatalln("cannot open database connection:", err)
+	}
+	go func() {
+		time.Sleep(2 * time.Second)
+		queue.Push("queue-name", []byte("content"))
+	}()
+	watch := queue.Watch("queue-name")
+	for watch.Next() {
+		fmt.Printf("msg: %s\n", watch.Message())
+		queue.Close()
+	}
+	if err := watch.Err(); err != nil {
+		log.Fatalln("cannot observe queue:", err)
+	}
+	// Output:
+	// msg: content
 }
