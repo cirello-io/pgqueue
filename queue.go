@@ -82,7 +82,7 @@ func (q *Queue) CreateTable() error {
 	}
 	defer tx.Rollback()
 	_, err = tx.ExecContext(ctx, `
-CREATE TABLE IF NOT EXISTS `+q.tableName+` (
+CREATE TABLE IF NOT EXISTS `+pq.QuoteIdentifier(q.tableName)+` (
 	id serial,
 	queue varchar,
 	state varchar,
@@ -108,7 +108,7 @@ func (q *Queue) Push(target string, content []byte) error {
 		return fmt.Errorf("cannot create transaction for message push: %w", err)
 	}
 	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `INSERT INTO `+q.tableName+` (queue, state, content) VALUES ($1, $2, $3)`, target, New, content)
+	_, err = tx.ExecContext(ctx, `INSERT INTO `+pq.QuoteIdentifier(q.tableName)+` (queue, state, content) VALUES ($1, $2, $3)`, target, New, content)
 	if err != nil {
 		return fmt.Errorf("cannot store message: %w", err)
 	}
@@ -135,7 +135,7 @@ func (q *Queue) Pop(target string) ([]byte, error) {
 		return nil, fmt.Errorf("cannot create transaction for message pop: %w", err)
 	}
 	defer tx.Rollback()
-	row := tx.QueryRowContext(ctx, `SELECT id, content FROM `+q.tableName+` WHERE state = $1`, New)
+	row := tx.QueryRowContext(ctx, `SELECT id, content FROM `+pq.QuoteIdentifier(q.tableName)+` WHERE state = $1`, New)
 	var (
 		id      uint64
 		content []byte
@@ -145,7 +145,7 @@ func (q *Queue) Pop(target string) ([]byte, error) {
 	} else if err == sql.ErrNoRows {
 		return nil, ErrEmptyQueue
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE `+q.tableName+` SET state = $1 WHERE id = $2`, Done, id); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE `+pq.QuoteIdentifier(q.tableName)+` SET state = $1 WHERE id = $2`, Done, id); err != nil {
 		return nil, fmt.Errorf("cannot store message: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
