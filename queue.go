@@ -69,8 +69,8 @@ func (q *Queue) Close() error {
 	return nil
 }
 
-func (q *Queue) tx(ctx context.Context) (*sql.Tx, error) {
-	return q.db.BeginTx(ctx, &sql.TxOptions{
+func (q *Queue) tx() (*sql.Tx, error) {
+	return q.db.BeginTx(context.Background(), &sql.TxOptions{
 		Isolation: sql.LevelSerializable,
 	})
 }
@@ -94,14 +94,13 @@ func (q *Queue) retry(f func() error) error {
 
 // CreateTable prepares the underlying table for the queue system.
 func (q *Queue) CreateTable() error {
-	ctx := context.TODO()
-	tx, err := q.tx(ctx)
+	tx, err := q.tx()
 	if err != nil {
 		return fmt.Errorf("cannot create transaction for table creation: %w", err)
 	}
 	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `
-CREATE TABLE IF NOT EXISTS `+pq.QuoteIdentifier(q.tableName)+` (
+	_, err = tx.Exec(`
+CREATE TABLE IF NOT EXISTS ` + pq.QuoteIdentifier(q.tableName) + ` (
 	id serial,
 	queue varchar,
 	state varchar,
@@ -124,20 +123,19 @@ func (q *Queue) Push(target string, content []byte) error {
 		return err
 	}
 	return q.retry(func() error {
-		ctx := context.TODO()
-		tx, err := q.tx(ctx)
+		tx, err := q.tx()
 		if err != nil {
 			return fmt.Errorf("cannot create transaction for message push: %w", err)
 		}
 		defer tx.Rollback()
-		_, err = tx.ExecContext(ctx, `INSERT INTO `+pq.QuoteIdentifier(q.tableName)+` (queue, state, content) VALUES ($1, $2, $3)`, target, New, content)
+		_, err = tx.Exec(`INSERT INTO `+pq.QuoteIdentifier(q.tableName)+` (queue, state, content) VALUES ($1, $2, $3)`, target, New, content)
 		if err != nil {
 			return fmt.Errorf("cannot store message: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("cannot commit message push transaction: %w", err)
 		}
-		_, err = q.db.ExecContext(ctx, `NOTIFY `+pq.QuoteIdentifier(target))
+		_, err = q.db.Exec(`NOTIFY ` + pq.QuoteIdentifier(target))
 		if err != nil {
 			return fmt.Errorf("cannot send push notification: %w", err)
 		}
@@ -154,20 +152,19 @@ var ErrEmptyQueue = fmt.Errorf("empty queue")
 func (q *Queue) Pop(target string) ([]byte, error) {
 	var content []byte
 	err := q.retry(func() error {
-		ctx := context.TODO()
-		tx, err := q.tx(ctx)
+		tx, err := q.tx()
 		if err != nil {
 			return fmt.Errorf("cannot create transaction for message pop: %w", err)
 		}
 		defer tx.Rollback()
-		row := tx.QueryRowContext(ctx, `SELECT id, content FROM `+pq.QuoteIdentifier(q.tableName)+` WHERE state = $1 LIMIT 1`, New)
+		row := tx.QueryRow(`SELECT id, content FROM `+pq.QuoteIdentifier(q.tableName)+` WHERE state = $1 LIMIT 1`, New)
 		var id uint64
 		if err := row.Scan(&id, &content); err != nil && err != sql.ErrNoRows {
 			return fmt.Errorf("cannot read message: %w", err)
 		} else if err == sql.ErrNoRows {
 			return ErrEmptyQueue
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE `+pq.QuoteIdentifier(q.tableName)+` SET tries = tries + 1, state = $1 WHERE id = $2`, Done, id); err != nil {
+		if _, err := tx.Exec(`UPDATE `+pq.QuoteIdentifier(q.tableName)+` SET tries = tries + 1, state = $1 WHERE id = $2`, Done, id); err != nil {
 			return fmt.Errorf("cannot store message: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
@@ -184,13 +181,12 @@ func (q *Queue) Pop(target string) ([]byte, error) {
 func (q *Queue) Reserve(target string, lease time.Duration) (*Message, error) {
 	var message *Message
 	err := q.retry(func() error {
-		ctx := context.TODO()
-		tx, err := q.tx(ctx)
+		tx, err := q.tx()
 		if err != nil {
 			return fmt.Errorf("cannot create transaction for message pop: %w", err)
 		}
 		defer tx.Rollback()
-		row := tx.QueryRowContext(ctx, `SELECT id, content FROM `+pq.QuoteIdentifier(q.tableName)+` WHERE state = $1 LIMIT 1`, New)
+		row := tx.QueryRow(`SELECT id, content FROM `+pq.QuoteIdentifier(q.tableName)+` WHERE state = $1 LIMIT 1`, New)
 		var id uint64
 		var content []byte
 		leasedUntil := time.Now().UTC().Add(lease)
@@ -199,7 +195,7 @@ func (q *Queue) Reserve(target string, lease time.Duration) (*Message, error) {
 		} else if err == sql.ErrNoRows {
 			return ErrEmptyQueue
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE `+pq.QuoteIdentifier(q.tableName)+` SET tries = tries + 1, state = $1, leased_until = $2 WHERE id = $3`, InProgress, leasedUntil, id); err != nil {
+		if _, err := tx.Exec(`UPDATE `+pq.QuoteIdentifier(q.tableName)+` SET tries = tries + 1, state = $1, leased_until = $2 WHERE id = $3`, InProgress, leasedUntil, id); err != nil {
 			return fmt.Errorf("cannot store message: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
@@ -218,13 +214,12 @@ func (q *Queue) Reserve(target string, lease time.Duration) (*Message, error) {
 
 func (q *Queue) done(id uint64) error {
 	return q.retry(func() error {
-		ctx := context.TODO()
-		tx, err := q.tx(ctx)
+		tx, err := q.tx()
 		if err != nil {
 			return fmt.Errorf("cannot create transaction for done message: %w", err)
 		}
 		defer tx.Rollback()
-		if _, err := tx.ExecContext(ctx, `UPDATE `+pq.QuoteIdentifier(q.tableName)+` SET state = $1 WHERE id = $2`, Done, id); err != nil {
+		if _, err := tx.Exec(`UPDATE `+pq.QuoteIdentifier(q.tableName)+` SET state = $1 WHERE id = $2`, Done, id); err != nil {
 			return fmt.Errorf("cannot store message: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
@@ -236,13 +231,12 @@ func (q *Queue) done(id uint64) error {
 
 func (q *Queue) release(id uint64) error {
 	return q.retry(func() error {
-		ctx := context.TODO()
-		tx, err := q.tx(ctx)
+		tx, err := q.tx()
 		if err != nil {
 			return fmt.Errorf("cannot create transaction for message release: %w", err)
 		}
 		defer tx.Rollback()
-		if _, err := tx.ExecContext(ctx, `UPDATE `+pq.QuoteIdentifier(q.tableName)+` SET leased_until = null, state = $1 WHERE id = $2`, New, id); err != nil {
+		if _, err := tx.Exec(`UPDATE `+pq.QuoteIdentifier(q.tableName)+` SET leased_until = null, state = $1 WHERE id = $2`, New, id); err != nil {
 			return fmt.Errorf("cannot store message: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
@@ -254,14 +248,13 @@ func (q *Queue) release(id uint64) error {
 
 func (q *Queue) touch(id uint64, extension time.Duration) error {
 	return q.retry(func() error {
-		ctx := context.TODO()
-		tx, err := q.tx(ctx)
+		tx, err := q.tx()
 		if err != nil {
 			return fmt.Errorf("cannot create transaction for message touch: %w", err)
 		}
 		defer tx.Rollback()
 		leasedUntil := time.Now().UTC().Add(extension)
-		if _, err := tx.ExecContext(ctx, `UPDATE `+pq.QuoteIdentifier(q.tableName)+` SET leased_until = $1 WHERE id = $2`, leasedUntil, id); err != nil {
+		if _, err := tx.Exec(`UPDATE `+pq.QuoteIdentifier(q.tableName)+` SET leased_until = $1 WHERE id = $2`, leasedUntil, id); err != nil {
 			return fmt.Errorf("cannot store message: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
@@ -275,13 +268,12 @@ func (q *Queue) touch(id uint64, extension time.Duration) error {
 func (q *Queue) Vacuum(target string) (VacuumStats, error) {
 	var stats VacuumStats
 	err := q.retry(func() error {
-		ctx := context.TODO()
-		tx, err := q.tx(ctx)
+		tx, err := q.tx()
 		if err != nil {
 			return fmt.Errorf("cannot create transaction for queue vacuum: %w", err)
 		}
 		defer tx.Rollback()
-		res, err := tx.ExecContext(ctx, `DELETE FROM `+pq.QuoteIdentifier(q.tableName)+` WHERE queue = $1 AND state = $2`, target, Done)
+		res, err := tx.Exec(`DELETE FROM `+pq.QuoteIdentifier(q.tableName)+` WHERE queue = $1 AND state = $2`, target, Done)
 		if err != nil {
 			return fmt.Errorf("cannot store message: %w", err)
 		}
@@ -289,7 +281,7 @@ func (q *Queue) Vacuum(target string) (VacuumStats, error) {
 		if err != nil {
 			return fmt.Errorf("cannot calculate how many done messages were deleted: %w", err)
 		}
-		res, err = tx.ExecContext(ctx, `DELETE FROM `+pq.QuoteIdentifier(q.tableName)+` WHERE queue = $1 AND state = $2 AND leased_until < NOW()`, target, InProgress)
+		res, err = tx.Exec(`DELETE FROM `+pq.QuoteIdentifier(q.tableName)+` WHERE queue = $1 AND state = $2 AND leased_until < NOW()`, target, InProgress)
 		if err != nil {
 			return fmt.Errorf("cannot store message: %w", err)
 		}
