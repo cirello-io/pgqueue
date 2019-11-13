@@ -157,7 +157,7 @@ func (q *Queue) Pop(target string) ([]byte, error) {
 			return fmt.Errorf("cannot create transaction for message pop: %w", err)
 		}
 		defer tx.Rollback()
-		row := tx.QueryRow(`SELECT id, content FROM `+pq.QuoteIdentifier(q.tableName)+` WHERE state = $1 LIMIT 1`, New)
+		row := tx.QueryRow(`SELECT id, content FROM `+pq.QuoteIdentifier(q.tableName)+` WHERE queue = $1 AND state = $2 ORDER BY id ASC LIMIT 1`, target, New)
 		var id uint64
 		if err := row.Scan(&id, &content); err != nil && err != sql.ErrNoRows {
 			return fmt.Errorf("cannot read message: %w", err)
@@ -186,7 +186,7 @@ func (q *Queue) Reserve(target string, lease time.Duration) (*Message, error) {
 			return fmt.Errorf("cannot create transaction for message pop: %w", err)
 		}
 		defer tx.Rollback()
-		row := tx.QueryRow(`SELECT id, content FROM `+pq.QuoteIdentifier(q.tableName)+` WHERE state = $1 LIMIT 1`, New)
+		row := tx.QueryRow(`SELECT id, content FROM `+pq.QuoteIdentifier(q.tableName)+` WHERE queue = $1 AND state = $2 ORDER BY id ASC LIMIT 1`, target, New)
 		var id uint64
 		var content []byte
 		leasedUntil := time.Now().UTC().Add(lease)

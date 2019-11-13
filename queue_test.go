@@ -34,6 +34,20 @@ func TestOverload(t *testing.T) {
 	if err := queue.CreateTable(); err != nil {
 		t.Fatal("cannot create queue table:", err)
 	}
+	t.Parallel()
+	t.Log("vacuuming the queue")
+	if _, err := queue.Vacuum("queue-overload"); err != nil {
+		t.Fatal("cannot clean up queue before overload test:", err)
+	}
+	t.Log("zeroing the queue")
+	for {
+		if _, err := queue.Pop("queue-overload"); err == pgqueue.ErrEmptyQueue {
+			break
+		} else if err != nil {
+			t.Fatal("cannot zero queue before overload test:", err)
+		}
+	}
+
 	t.Log("pushing messages")
 	for i := 0; i < 1_000; i++ {
 		content := []byte("content")
@@ -80,6 +94,15 @@ func TestVacuum(t *testing.T) {
 	defer queue.Close()
 	if err := queue.CreateTable(); err != nil {
 		t.Fatal("cannot create queue table:", err)
+	}
+	t.Parallel()
+	t.Log("zeroing the queue")
+	for {
+		if _, err := queue.Pop("queue-vacuum"); err == pgqueue.ErrEmptyQueue {
+			break
+		} else if err != nil {
+			t.Fatal("cannot zero queue before vacuum test:", err)
+		}
 	}
 	for i := 0; i < 10; i++ {
 		content := []byte("content")
