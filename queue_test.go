@@ -17,6 +17,7 @@ import (
 	"flag"
 	"sync"
 	"testing"
+	"time"
 
 	"cirello.io/pgqueue"
 	_ "github.com/lib/pq"
@@ -69,4 +70,46 @@ func TestOverload(t *testing.T) {
 	if totalMsg != 1_000 {
 		t.Fatal("messages lost?", totalMsg)
 	}
+}
+
+func TestVacuum(t *testing.T) {
+	queue, err := pgqueue.Open(*dsn)
+	if err != nil {
+		t.Fatal("cannot open database connection:", err)
+	}
+	defer queue.Close()
+	if err := queue.CreateTable(); err != nil {
+		t.Fatal("cannot create queue table:", err)
+	}
+	for i := 0; i < 10; i++ {
+		content := []byte("content")
+		if err := queue.Push("queue-vacuum", content); err != nil {
+			t.Fatal("cannot push message to queue:", err)
+		}
+		if _, err := queue.Pop("queue-vacuum"); err != nil {
+			t.Fatal("cannot pop message from the queue:", err)
+		}
+	}
+	for i := 0; i < 10; i++ {
+		content := []byte("content")
+		if err := queue.Push("queue-vacuum", content); err != nil {
+			t.Fatal("cannot push message to queue:", err)
+		}
+		if _, err := queue.Reserve("queue-vacuum", time.Second); err != nil {
+			t.Fatal("cannot reserve message from the queue:", err)
+		}
+	}
+	time.Sleep(time.Second)
+	stats, err := queue.Vacuum("queue-vacuum")
+	if err != nil {
+		t.Fatal("cannot clean up queue:", err)
+	}
+	t.Log("done message count:", stats.Done)
+	t.Log("dead message count:", stats.Deads)
+	if stats.Done != 10 || stats.Deads != 10 {
+		t.Fatal("queue lost message")
+	}
+	// Output:
+	// done message count: 10
+	// dead message count: 10
 }

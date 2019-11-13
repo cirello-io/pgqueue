@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"fmt"
 	"log"
+	"time"
 
 	"cirello.io/pgqueue"
 	_ "github.com/lib/pq"
@@ -88,4 +89,115 @@ func Example_listen() {
 	}
 	// Output:
 	// msg: content
+}
+
+func Example_reservation() {
+	queue, err := pgqueue.Open(*dsn)
+	if err != nil {
+		log.Fatalln("cannot open database connection:", err)
+	}
+	if err := queue.CreateTable(); err != nil {
+		log.Fatalln("cannot create queue table:", err)
+	}
+	content := []byte("content")
+	if err := queue.Push("queue-reservation", content); err != nil {
+		log.Fatalln("cannot push message to queue:", err)
+	}
+	r, err := queue.Reserve("queue-reservation", 1*time.Minute)
+	if err != nil {
+		log.Fatalln("cannot pop message from the queue:", err)
+	}
+	fmt.Printf("content: %s\n", r.Content)
+	if err := r.Done(); err != nil {
+		log.Fatalln("cannot mark message as done:", err)
+	}
+	// Output:
+	// content: content
+}
+
+func Example_reservedReleased() {
+	queue, err := pgqueue.Open(*dsn)
+	if err != nil {
+		log.Fatalln("cannot open database connection:", err)
+	}
+	if err := queue.CreateTable(); err != nil {
+		log.Fatalln("cannot create queue table:", err)
+	}
+	content := []byte("content")
+	if err := queue.Push("queue-release", content); err != nil {
+		log.Fatalln("cannot push message to queue:", err)
+	}
+	r, err := queue.Reserve("queue-release", 1*time.Minute)
+	if err != nil {
+		log.Fatalln("cannot pop message from the queue:", err)
+	}
+	fmt.Printf("content: %s\n", r.Content)
+	if err := r.Release(); err != nil {
+		log.Fatalln("cannot release the message back to the queue:", err)
+	}
+	// Output:
+	// content: content
+}
+
+func Example_reservedTouch() {
+	queue, err := pgqueue.Open(*dsn)
+	if err != nil {
+		log.Fatalln("cannot open database connection:", err)
+	}
+	if err := queue.CreateTable(); err != nil {
+		log.Fatalln("cannot create queue table:", err)
+	}
+	content := []byte("content")
+	if err := queue.Push("queue-touch", content); err != nil {
+		log.Fatalln("cannot push message to queue:", err)
+	}
+	r, err := queue.Reserve("queue-touch", 10*time.Second)
+	if err != nil {
+		log.Fatalln("cannot pop message from the queue:", err)
+	}
+	fmt.Printf("content: %s\n", r.Content)
+	time.Sleep(5 * time.Second)
+	if err := r.Touch(1 * time.Minute); err != nil {
+		log.Fatalln("cannot extend message lease:", err)
+	}
+	// Output:
+	// content: content
+}
+
+func Example_vacuum() {
+	queue, err := pgqueue.Open(*dsn)
+	if err != nil {
+		log.Fatalln("cannot open database connection:", err)
+	}
+	if err := queue.CreateTable(); err != nil {
+		log.Fatalln("cannot create queue table:", err)
+	}
+	for i := 0; i < 10; i++ {
+		content := []byte("content")
+		if err := queue.Push("queue-vacuum", content); err != nil {
+			log.Fatalln("cannot push message to queue:", err)
+		}
+		if _, err := queue.Pop("queue-vacuum"); err != nil {
+			log.Fatalln("cannot pop message from the queue:", err)
+		}
+	}
+	for i := 0; i < 10; i++ {
+		content := []byte("content")
+		if err := queue.Push("queue-vacuum", content); err != nil {
+			log.Fatalln("cannot push message to queue:", err)
+		}
+		if _, err := queue.Reserve("queue-vacuum", time.Second); err != nil {
+			log.Fatalln("cannot reserve message from the queue:", err)
+		}
+	}
+	time.Sleep(time.Second)
+	stats, err := queue.Vacuum("queue-vacuum")
+	if err != nil {
+		log.Fatalln("cannot clean up queue:", err)
+	}
+	fmt.Println("done message count:", stats.Done)
+	fmt.Println("dead message count:", stats.Deads)
+	// Output:
+	// done message count: 10
+	// dead message count: 10
 }
