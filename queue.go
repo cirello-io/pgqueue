@@ -216,25 +216,22 @@ func (w *Watcher) Next() bool {
 		return false
 	}
 	for {
-		msg, err := w.queue.Pop(w.target)
-		if err == nil {
-			w.msg = msg
-			return true
-		}
+
 		select {
 		case _, ok := <-w.queue.listener.Notify:
 			if !ok {
 				return false
 			}
-			msg, err := w.queue.Pop(w.target)
-			if err == ErrEmptyQueue {
-				continue
-			}
-			w.msg = msg
-			return true
 		case <-time.After(5 * time.Second):
-			go w.queue.listener.Ping()
 		}
+		msg, err := w.queue.Pop(w.target)
+		if err == sql.ErrConnDone {
+			return false
+		} else if err == ErrEmptyQueue {
+			continue
+		}
+		w.msg = msg
+		return true
 	}
 }
 
