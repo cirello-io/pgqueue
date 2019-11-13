@@ -15,6 +15,7 @@ package pgqueue_test
 
 import (
 	"flag"
+	"sync"
 	"testing"
 
 	"cirello.io/pgqueue"
@@ -40,7 +41,12 @@ func TestOverload(t *testing.T) {
 		}
 	}
 	t.Log("popping messages")
-	var g errgroup.Group
+	var (
+		g errgroup.Group
+
+		mu       sync.Mutex
+		totalMsg int
+	)
 	for i := 0; i < 10; i++ {
 		g.Go(func() error {
 			for {
@@ -51,10 +57,16 @@ func TestOverload(t *testing.T) {
 					t.Log(err)
 					return err
 				}
+				mu.Lock()
+				totalMsg++
+				mu.Unlock()
 			}
 		})
 	}
 	if err := g.Wait(); err != nil {
 		t.Fatal(err)
+	}
+	if totalMsg != 1_000 {
+		t.Fatal("messages lost?", totalMsg)
 	}
 }
