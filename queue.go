@@ -537,7 +537,7 @@ func (w *Watcher) Next() bool {
 		select {
 		case n := <-w.queue.client.listener.Notify:
 			isReconnection := n == nil
-			isOtherQueue := n.Extra != w.queue.queue
+			isOtherQueue := n != nil && n.Extra != w.queue.queue
 			if isReconnection || isOtherQueue {
 				continue
 			}
