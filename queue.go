@@ -542,8 +542,7 @@ func (w *Watcher) Next() bool {
 				continue
 			}
 		case <-time.After(missedNotificationTimer):
-			// Is the server still alive?
-			go w.queue.client.listener.Ping()
+			w.queue.client.listener.Ping()
 		}
 		switch msg, err := w.queue.Reserve(w.lease); err {
 		case ErrEmptyQueue:
