@@ -191,11 +191,12 @@ func TestReconfiguredClient(t *testing.T) {
 		}
 	})
 	t.Run("valid DSN to bad target", func(t *testing.T) {
-		client, err := Open("bad-target")
+		client, err := Open("postgresql://server-404")
 		if err == nil {
 			client.Close()
 			t.Fatal("expected error not found")
 		}
+		t.Log("error:", err)
 	})
 	t.Run("bad DSN", func(t *testing.T) {
 		client, err := Open("postgresql://bad-target?client_encoding=absurd")
