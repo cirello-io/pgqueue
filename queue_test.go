@@ -333,6 +333,8 @@ func TestWatchNextErrors(t *testing.T) {
 }
 
 func TestCrossQueueBump(t *testing.T) {
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	client, err := Open(dsn)
 	if err != nil {
 		t.Fatal("cannot open database connection:", err)
@@ -345,7 +347,9 @@ func TestCrossQueueBump(t *testing.T) {
 	qBravo.Push([]byte("message-bravo"))
 	watchAlpha := qAlpha.Watch(time.Minute)
 	alphaGotMessage := make(chan struct{})
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		watchAlpha.Next()
 		close(alphaGotMessage)
 		t.Log("watchAlpha got a message")
