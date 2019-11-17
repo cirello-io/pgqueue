@@ -582,13 +582,10 @@ func (w *Watcher) Next() bool {
 			w.err = err
 			unsub()
 			return false
-		case nil:
-			w.msg = msg
-			return true
 		default:
+			w.msg = msg
 			w.err = err
-			unsub()
-			return false
+			return err == nil
 		}
 		select {
 		case <-w.notifications:
