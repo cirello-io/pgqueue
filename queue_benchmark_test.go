@@ -87,7 +87,7 @@ func BenchmarkThroughput(b *testing.B) {
 			}
 			b.SetBytes(int64(len(msg.Content)))
 			if err := msg.Done(); err != nil {
-				b.Fatalf("cannot mark message (%d) as done: %s", msg.ID(), err)
+				b.Fatalf("cannot mark message (%d) as done: %s", msg.id, err)
 			}
 		}
 	})
