@@ -534,19 +534,8 @@ func (w *Watcher) Next() bool {
 		return false
 	}
 	for {
-		select {
-		case n := <-w.queue.client.listener.Notify:
-			isReconnection := n == nil
-			isOtherQueue := n != nil && n.Extra != w.queue.queue
-			if isReconnection || isOtherQueue {
-				continue
-			}
-		case <-time.After(missedNotificationTimer):
-			w.queue.client.listener.Ping()
-		}
 		switch msg, err := w.queue.Reserve(w.lease); err {
 		case ErrEmptyQueue:
-			continue
 		case sql.ErrConnDone, ErrAlreadyClosed:
 			w.err = err
 			return false
@@ -554,8 +543,14 @@ func (w *Watcher) Next() bool {
 			w.msg = msg
 			return true
 		default:
-			panic(err)
+			w.err = err
+			return false
 		}
+		select {
+		case <-time.After(missedNotificationTimer):
+		case <-w.queue.client.listener.Notify:
+		}
+
 	}
 }
 

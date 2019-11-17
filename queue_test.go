@@ -342,29 +342,31 @@ func TestCrossQueueBump(t *testing.T) {
 	defer qAlpha.Close()
 	qBravo := client.Queue("cross-queue-bump-bravo", DisableAutoVacuum())
 	defer qBravo.Close()
+	qBravo.Push([]byte("message-bravo"))
+
 	watchAlpha := qAlpha.Watch(time.Minute)
 	alphaGotMessage := make(chan struct{})
 	go func() {
 		watchAlpha.Next()
 		close(alphaGotMessage)
 	}()
-	qBravo.Push([]byte("message-bravo"))
 	select {
 	case <-alphaGotMessage:
 		msg := watchAlpha.Message().Content
 		t.Logf("msg: %s", msg)
 		t.Fatal("wrong bump")
-	default:
+	case <-time.After(missedNotificationTimer):
+		t.Log("watchAlpa.Next() was not affected by a message dispatched to qBravo")
 	}
 	qAlpha.Push([]byte("message-alpha"))
 	select {
 	case <-alphaGotMessage:
+		msg := watchAlpha.Message().Content
+		t.Logf("msg: %s", msg)
+		if !bytes.Equal([]byte("message-alpha"), msg) {
+			t.Error("unexpected message found")
+		}
 	case <-time.After(missedNotificationTimer):
 		t.Error("missed bump")
-	}
-	msg := watchAlpha.Message().Content
-	t.Logf("msg: %s", msg)
-	if !bytes.Equal([]byte("message-alpha"), msg) {
-		t.Error("unexpected message found")
 	}
 }
