@@ -91,9 +91,11 @@ func Example_listen() {
 	queue := client.Queue("example-queue-listen")
 	defer queue.Close()
 	go queue.Push([]byte("content"))
-	watch := queue.Watch()
+	watch := queue.Watch(time.Minute)
 	for watch.Next() {
-		fmt.Printf("msg: %s\n", watch.Message())
+		msg := watch.Message()
+		fmt.Printf("msg: %s\n", msg.Content)
+		msg.Done()
 		queue.Close()
 	}
 	if err := watch.Err(); err != nil {

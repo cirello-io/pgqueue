@@ -235,9 +235,10 @@ func (q *Queue) VacuumStats() VacuumStats {
 }
 
 // Watch observes new messages for the target queue.
-func (q *Queue) Watch() *Watcher {
+func (q *Queue) Watch(lease time.Duration) *Watcher {
 	watcher := &Watcher{
 		queue: q,
+		lease: lease,
 	}
 	watcher.err = q.client.listener.Listen(q.queue)
 	return watcher
@@ -467,7 +468,8 @@ func (q *Queue) runVacuum() {
 // indicates a new message has arrive in the pipe.
 type Watcher struct {
 	queue *Queue
-	msg   []byte
+	lease time.Duration
+	msg   *Message
 	err   error
 }
 
@@ -487,7 +489,7 @@ func (w *Watcher) Next() bool {
 			}
 		case <-time.After(missedNotificationTimer):
 		}
-		switch msg, err := w.queue.Pop(); err {
+		switch msg, err := w.queue.Reserve(w.lease); err {
 		case ErrEmptyQueue:
 			continue
 		case sql.ErrConnDone, ErrAlreadyClosed:
@@ -500,7 +502,7 @@ func (w *Watcher) Next() bool {
 }
 
 // Message returns the current message store in the Watcher.
-func (w *Watcher) Message() []byte {
+func (w *Watcher) Message() *Message {
 	return w.msg
 }
 
