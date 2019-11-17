@@ -359,12 +359,12 @@ func TestCrossQueueBump(t *testing.T) {
 	qAlpha.Push([]byte("message-alpha"))
 	select {
 	case <-alphaGotMessage:
-		msg := watchAlpha.Message().Content
-		t.Logf("msg: %s", msg)
-		if !bytes.Equal([]byte("message-alpha"), msg) {
-			t.Error("unexpected message found")
-		}
 	case <-time.After(missedNotificationTimer):
-		t.Fatal("missed bump")
+		t.Error("missed bump")
+	}
+	msg := watchAlpha.Message().Content
+	t.Logf("msg: %s", msg)
+	if !bytes.Equal([]byte("message-alpha"), msg) {
+		t.Error("unexpected message found")
 	}
 }
