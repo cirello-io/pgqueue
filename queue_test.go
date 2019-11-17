@@ -351,6 +351,8 @@ func TestCrossQueueBump(t *testing.T) {
 	qBravo.Push([]byte("message-bravo"))
 	select {
 	case <-alphaGotMessage:
+		msg := watchAlpha.Message().Content
+		t.Logf("msg: %s", msg)
 		t.Fatal("wrong bump")
 	default:
 	}
