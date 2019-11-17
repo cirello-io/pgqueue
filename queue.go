@@ -550,9 +550,11 @@ func (w *Watcher) Next() bool {
 		case sql.ErrConnDone, ErrAlreadyClosed:
 			w.err = err
 			return false
-		default:
+		case nil:
 			w.msg = msg
 			return true
+		default:
+			panic(err)
 		}
 	}
 }
