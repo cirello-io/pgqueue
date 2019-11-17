@@ -229,5 +229,7 @@ func TestCloseError(t *testing.T) {
 	}
 	if err := client.Close(); err == nil {
 		t.Fatal("second close should always be dirty:", err)
+	} else {
+		t.Log("expected error found:", err)
 	}
 }
