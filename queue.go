@@ -90,10 +90,11 @@ func WithCustomTable(tableName string) ClientOption {
 
 // Open uses the given database connection and start operating the queue system.
 func Open(dsn string, opts ...ClientOption) (*Client, error) {
-	db, err := sql.Open("postgres", dsn)
+	connector, err := pq.NewConnector(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("cannot create database connection: %w", err)
+		return nil, fmt.Errorf("bad DSN: %w", err)
 	}
+	db := sql.OpenDB(connector)
 	if err := db.Ping(); err != nil {
 		return nil, fmt.Errorf("cannot open database: %w", err)
 	}
