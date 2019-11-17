@@ -309,13 +309,17 @@ type VacuumStats struct {
 	// Dead reports how many expired messages marked as InProgress but with
 	// high delivery count were moved to the deadletter queue.
 	Dead int64
-	// Error indicates why the vacuum cycle failed. If nil, it succeeded.
-	Error error
+	// Err indicates why the vacuum cycle failed. If nil, it succeeded.
+	Err error
 }
 
 // Vacuum cleans up the queue from done or dead messages.
 func (q *Queue) Vacuum() VacuumStats {
 	var stats VacuumStats
+	if q.isClosed() {
+		stats.Err = ErrAlreadyClosed
+		return stats
+	}
 	err := q.client.retry(func(tx *sql.Tx) (err error) {
 		stats = VacuumStats{}
 		res, err := tx.Exec(`DELETE FROM `+pq.QuoteIdentifier(q.client.tableName)+` WHERE queue = $1 AND state = $2`, q.queue, Done)
@@ -346,7 +350,7 @@ func (q *Queue) Vacuum() VacuumStats {
 		}
 		return nil
 	})
-	stats.Error = err
+	stats.Err = err
 	return stats
 }
 
@@ -473,6 +477,9 @@ func (q *Queue) Close() error {
 		}
 		close(q.closed)
 		err = nil
+		q.muStats.Lock()
+		q.vacuumStats.Err = ErrAlreadyClosed
+		q.muStats.Unlock()
 	})
 	return err
 }
@@ -498,7 +505,7 @@ func (q *Queue) runVacuum() {
 			q.vacuumStats.Done += stats.Done
 			q.vacuumStats.Recovered += stats.Recovered
 			q.vacuumStats.Dead += stats.Dead
-			q.vacuumStats.Error = stats.Error
+			q.vacuumStats.Err = stats.Err
 			q.muStats.Unlock()
 		}
 	}

@@ -39,8 +39,8 @@ func TestOverload(t *testing.T) {
 	queue := client.Queue("queue-overload", DisableAutoVacuum())
 	defer queue.Close()
 	t.Log("vacuuming the queue")
-	if stats := queue.Vacuum(); stats.Error != nil {
-		t.Fatal("cannot clean up queue before overload test:", stats.Error)
+	if stats := queue.Vacuum(); stats.Err != nil {
+		t.Fatal("cannot clean up queue before overload test:", stats.Err)
 	}
 	t.Log("zeroing the queue")
 	for {
@@ -110,7 +110,7 @@ func TestCustomAutoVacuum(t *testing.T) {
 	}
 	time.Sleep(freq * 2)
 	stats := queue.VacuumStats()
-	if stats.Error != nil {
+	if stats.Err != nil {
 		t.Fatal("unexpected error found on vacuum stats:", err)
 	}
 	t.Log(stats.Done)
@@ -145,14 +145,14 @@ func TestDeadletterDump(t *testing.T) {
 		t.Fatal("cannot reserve message from the queue (try):", err)
 	}
 	time.Sleep(2 * reservationTime)
-	if stats := queue.Vacuum(); stats.Error != nil {
+	if stats := queue.Vacuum(); stats.Err != nil {
 		t.Fatal("cannot clean up queue:", err)
 	}
 	if _, err := queue.Reserve(reservationTime); err != nil {
 		t.Fatal("cannot reserve message from the queue (retry):", err)
 	}
 	time.Sleep(2 * reservationTime)
-	if stats := queue.Vacuum(); stats.Error != nil {
+	if stats := queue.Vacuum(); stats.Err != nil {
 		t.Fatal("cannot clean up queue:", err)
 	}
 
@@ -242,6 +242,12 @@ func TestClosedQueue(t *testing.T) {
 	defer client.Close()
 	q := client.Queue("closed-client-queue")
 	q.Close()
+	if stats := q.VacuumStats(); stats.Err != ErrAlreadyClosed {
+		t.Error("auto-vacuum VacuumStats.Err on closed queue must error with ErrAlreadyClosed:", stats.Err)
+	}
+	if stats := q.Vacuum(); stats.Err != ErrAlreadyClosed {
+		t.Error("vacuum VacuumStats.Err on closed queue must error with ErrAlreadyClosed:", stats.Err)
+	}
 	if err := q.Push(nil); err != ErrAlreadyClosed {
 		t.Error("push on closed queue must fail with ErrAlreadyClose:", err)
 	}
@@ -256,8 +262,12 @@ func TestClosedQueue(t *testing.T) {
 		t.Error("Watcher.Next on closed queue must be false")
 	}
 	if err := w.Err(); err != ErrAlreadyClosed {
-		t.Error("Watcher.Err() on closed queue must errors with ErrAlreadyClosed:", err)
+		t.Error("Watcher.Err() on closed queue must error with ErrAlreadyClosed:", err)
 	}
+	if stats := q.VacuumStats(); stats.Err != ErrAlreadyClosed {
+		t.Error("VacuumStats.Err on closed queue must error with ErrAlreadyClosed:", stats.Err)
+	}
+
 	if err := q.Close(); err != ErrAlreadyClosed {
 		t.Error("close on closed queue must error with ErrAlreadyClosed:", err)
 	}
