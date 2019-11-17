@@ -381,3 +381,43 @@ func TestCrossQueueBump(t *testing.T) {
 		t.Error("missed bump")
 	}
 }
+
+func TestSaturatedNotifications(t *testing.T) {
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	client, err := Open(dsn)
+	if err != nil {
+		t.Fatal("cannot open database connection:", err)
+	}
+	defer client.Close()
+	if err := client.CreateTable(); err != nil {
+		t.Fatal("cannot create queue table:", err)
+	}
+	q := client.Queue("saturated-notifications", DisableAutoVacuum())
+	defer q.Close()
+	// force Client.forwardNotifications to start dropping messages.
+	w := q.Watch(time.Minute)
+	if err := q.Push([]byte("message-1")); err != nil {
+		t.Fatal("cannot push message (1) to the queue:", err)
+	}
+	if err := q.Push([]byte("message-2")); err != nil {
+		t.Fatal("cannot push messages (2) to the queue:", err)
+	}
+	if !w.Next() {
+		t.Error("there are two messages in the queue, w.Next() must be true")
+	}
+	t.Logf("%s", w.Message().Content)
+	if !w.Next() {
+		t.Error("there is one message in the queue, w.Next() must be true")
+	}
+	t.Logf("%s", w.Message().Content)
+	next := make(chan bool, 1)
+	go func() {
+		next <- w.Next()
+	}()
+	time.Sleep(time.Second)
+	q.Close()
+	if <-next {
+		t.Error("next should have been false after close")
+	}
+}
