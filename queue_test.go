@@ -17,6 +17,7 @@ import (
 	"flag"
 	"sync"
 	"testing"
+	"time"
 
 	"cirello.io/pgqueue"
 	_ "github.com/lib/pq"
@@ -85,5 +86,38 @@ func TestOverload(t *testing.T) {
 	}
 	if totalMsg != 1_000 {
 		t.Fatal("messages lost?", totalMsg)
+	}
+}
+
+func TestCustomAutoVacuum(t *testing.T) {
+	client, err := pgqueue.Open(*dsn)
+	if err != nil {
+		t.Fatal("cannot open database connection:", err)
+	}
+	defer client.Close()
+	if err := client.CreateTable(); err != nil {
+		t.Fatal("cannot create queue table:", err)
+	}
+	const freq = 100 * time.Millisecond
+	timer := time.NewTimer(freq)
+	queue := client.Queue("queue-custom-autovacuum", pgqueue.WithCustomAutoVacuum(timer))
+	defer queue.Close()
+	t.Parallel()
+	if err := queue.Push([]byte("content")); err != nil {
+		t.Fatal("cannot push content:", err)
+	}
+	if _, err := queue.Pop(); err != nil {
+		t.Fatal("cannot pop content:", err)
+	}
+	time.Sleep(freq * 2)
+	stats := queue.VacuumStats()
+	if stats.Error != nil {
+		t.Fatal("unexpected error found on vacuum stats:", err)
+	}
+	t.Log(stats.Done)
+	t.Log(stats.Recovered)
+	t.Log(stats.Dead)
+	if stats.Done != 1 || stats.Recovered != 0 || stats.Dead != 0 {
+		t.Fatal("auto-vacuum failed")
 	}
 }

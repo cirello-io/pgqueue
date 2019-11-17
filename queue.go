@@ -54,7 +54,8 @@ const DefaultDeadLetterQueueName = "deadletter"
 
 // reasonable defaults
 const (
-	defaultTableName = "queue"
+	defaultTableName       = "queue"
+	defaultVacuumFrequency = 1 * time.Minute
 )
 
 // State indicates the possible states of a message
@@ -114,17 +115,18 @@ func (c *Client) Close() error {
 
 // Queue configures a queue.
 func (c *Client) Queue(queue string, opts ...QueueOption) *Queue {
+	timer := time.NewTimer(defaultVacuumFrequency)
 	q := &Queue{
-		client:     c,
-		queue:      queue,
-		maxRetries: DefaultMaxRetries,
-		autoVacuum: true,
-		closed:     make(chan struct{}),
+		client:      c,
+		queue:       queue,
+		vacuumTimer: timer,
+		maxRetries:  DefaultMaxRetries,
+		closed:      make(chan struct{}),
 	}
 	for _, opt := range opts {
 		opt(q)
 	}
-	if q.autoVacuum {
+	if q.vacuumTimer != nil {
 		go q.runVacuum()
 	}
 	return q
@@ -182,11 +184,11 @@ func (c *Client) CreateTable() error {
 type Queue struct {
 	client *Client
 
-	queue      string
-	maxRetries int
-	autoVacuum bool
-	closeOnce  sync.Once
-	closed     chan struct{}
+	queue       string
+	maxRetries  int
+	vacuumTimer *time.Timer
+	closeOnce   sync.Once
+	closed      chan struct{}
 
 	muStats     sync.RWMutex
 	vacuumStats VacuumStats
@@ -206,7 +208,20 @@ func WithCustomRetries(retries int) QueueOption {
 // DisableAutoVacuum forces the use of manual queue clean up.
 func DisableAutoVacuum() QueueOption {
 	return func(q *Queue) {
-		q.autoVacuum = false
+		if q.vacuumTimer != nil {
+			q.vacuumTimer.Stop()
+		}
+		q.vacuumTimer = nil
+	}
+}
+
+// WithCustomAutoVacuum replaces the default auto-vacuum timer.
+func WithCustomAutoVacuum(timer *time.Timer) QueueOption {
+	return func(q *Queue) {
+		if q.vacuumTimer != nil {
+			q.vacuumTimer.Stop()
+		}
+		q.vacuumTimer = timer
 	}
 }
 
@@ -377,6 +392,9 @@ func (q *Queue) Pop() ([]byte, error) {
 func (q *Queue) Close() error {
 	err := ErrAlreadyClosed
 	q.closeOnce.Do(func() {
+		if q.vacuumTimer != nil {
+			q.vacuumTimer.Stop()
+		}
 		close(q.closed)
 		err = nil
 	})
@@ -398,7 +416,7 @@ func (q *Queue) runVacuum() {
 		select {
 		case <-q.closed:
 			return
-		case <-time.After(1 * time.Minute):
+		case <-q.vacuumTimer.C:
 			stats := q.Vacuum()
 			q.muStats.Lock()
 			q.vacuumStats.Done += stats.Done
