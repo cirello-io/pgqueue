@@ -550,7 +550,6 @@ func (w *Watcher) Next() bool {
 		case <-time.After(missedNotificationTimer):
 		case <-w.queue.client.listener.Notify:
 		}
-
 	}
 }
 
