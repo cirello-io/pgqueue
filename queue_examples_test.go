@@ -28,6 +28,7 @@ func Example_basic() {
 	if err != nil {
 		log.Fatalln("cannot open database connection:", err)
 	}
+	defer client.Close()
 	if err := client.CreateTable(); err != nil {
 		log.Fatalln("cannot create queue table:", err)
 	}
@@ -51,6 +52,7 @@ func Example_emptyQueue() {
 	if err != nil {
 		log.Fatalln("cannot open database connection:", err)
 	}
+	defer client.Close()
 	if err := client.CreateTable(); err != nil {
 		log.Fatalln("cannot create queue table:", err)
 	}
@@ -67,6 +69,7 @@ func Example_largeMessage() {
 	if err != nil {
 		log.Fatalln("cannot open database connection:", err)
 	}
+	defer client.Close()
 	if err := client.CreateTable(); err != nil {
 		log.Fatalln("cannot create queue table:", err)
 	}
@@ -84,6 +87,7 @@ func Example_listen() {
 	if err != nil {
 		log.Fatalln("cannot open database connection:", err)
 	}
+	defer client.Close()
 	queue := client.Queue("example-queue-listen")
 	defer queue.Close()
 	go queue.Push([]byte("content"))
@@ -104,6 +108,7 @@ func Example_reservation() {
 	if err != nil {
 		log.Fatalln("cannot open database connection:", err)
 	}
+	defer client.Close()
 	if err := client.CreateTable(); err != nil {
 		log.Fatalln("cannot create queue table:", err)
 	}
@@ -130,6 +135,7 @@ func Example_reservedReleased() {
 	if err != nil {
 		log.Fatalln("cannot open database connection:", err)
 	}
+	defer client.Close()
 	if err := client.CreateTable(); err != nil {
 		log.Fatalln("cannot create queue table:", err)
 	}
@@ -156,6 +162,7 @@ func Example_reservedTouch() {
 	if err != nil {
 		log.Fatalln("cannot open database connection:", err)
 	}
+	defer client.Close()
 	if err := client.CreateTable(); err != nil {
 		log.Fatalln("cannot create queue table:", err)
 	}
@@ -184,6 +191,7 @@ func Example_vacuum() {
 	if err != nil {
 		log.Fatalln("cannot open database connection:", err)
 	}
+	defer client.Close()
 	if err := client.CreateTable(); err != nil {
 		log.Fatalln("cannot create queue table:", err)
 	}

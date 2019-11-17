@@ -30,6 +30,7 @@ func TestOverload(t *testing.T) {
 	if err != nil {
 		t.Fatal("cannot open database connection:", err)
 	}
+	defer client.Close()
 	if err := client.CreateTable(); err != nil {
 		t.Fatal("cannot create queue table:", err)
 	}
