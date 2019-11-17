@@ -14,7 +14,9 @@
 package pgqueue_test
 
 import (
+	"bytes"
 	"flag"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -119,5 +121,50 @@ func TestCustomAutoVacuum(t *testing.T) {
 	t.Log(stats.Dead)
 	if stats.Done != 1 || stats.Recovered != 0 || stats.Dead != 0 {
 		t.Fatal("auto-vacuum failed")
+	}
+}
+
+func TestDeadletterDump(t *testing.T) {
+	const reservationTime = 500 * time.Millisecond
+	client, err := pgqueue.Open(*dsn)
+	if err != nil {
+		t.Fatal("cannot open database connection:", err)
+	}
+	defer client.Close()
+	if err := client.CreateTable(); err != nil {
+		t.Fatal("cannot create queue table:", err)
+	}
+	queue := client.Queue(
+		"example-deadletter-queue",
+		pgqueue.WithMaxDeliveries(1),
+		pgqueue.DisableAutoVacuum(),
+	)
+	defer queue.Close()
+	content := []byte("the message")
+	if err := queue.Push(content); err != nil {
+		t.Fatal("cannot push message to queue:", err)
+	}
+	if _, err := queue.Reserve(reservationTime); err != nil {
+		t.Fatal("cannot reserve message from the queue (try):", err)
+	}
+	time.Sleep(2 * reservationTime)
+	if stats := queue.Vacuum(); stats.Error != nil {
+		t.Fatal("cannot clean up queue:", err)
+	}
+	if _, err := queue.Reserve(reservationTime); err != nil {
+		t.Fatal("cannot reserve message from the queue (retry):", err)
+	}
+	time.Sleep(2 * reservationTime)
+	if stats := queue.Vacuum(); stats.Error != nil {
+		t.Fatal("cannot clean up queue:", err)
+	}
+
+	var buf bytes.Buffer
+	if err := queue.DumpDeadLetterQueue(&buf); err != nil {
+		t.Fatal("cannot dump dead letter queue")
+	}
+	t.Log(buf.String())
+	if !strings.Contains(buf.String(), "dGhlIG1lc3NhZ2U=") {
+		t.Fatal("bad dump found")
 	}
 }

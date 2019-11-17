@@ -16,8 +16,10 @@ package pgqueue
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sync"
 	"time"
 
@@ -386,6 +388,39 @@ func (q *Queue) Pop() ([]byte, error) {
 		return nil
 	})
 	return content, err
+}
+
+// DumpDeadLetterQueue writes the messages into the writer and remove them from
+// the database.
+func (q *Queue) DumpDeadLetterQueue(w io.Writer) error {
+	rows, err := q.client.db.Query(`
+		SELECT
+			id, content
+		FROM
+			`+pq.QuoteIdentifier(q.client.tableName)+`
+		WHERE
+			queue = $1
+	`, DefaultDeadLetterQueueNamePrefix+"-"+q.queue)
+	if err != nil {
+		return fmt.Errorf("cannot load dead letter queue messages: %w", err)
+	}
+	enc := json.NewEncoder(w)
+	for rows.Next() {
+		var row struct {
+			ID      uint64 `json:"id"`
+			Content []byte `json:"content"`
+		}
+		if err := rows.Scan(&row.ID, &row.Content); err != nil {
+			return fmt.Errorf("cannot parse message row: %w", err)
+		}
+		if err := enc.Encode(row); err != nil {
+			return fmt.Errorf("cannot flush message row: %w", err)
+		}
+		if _, err := q.client.db.Exec(`DELETE FROM `+pq.QuoteIdentifier(q.client.tableName)+` WHERE id = $1`, row.ID); err != nil {
+			return fmt.Errorf("cannot delete flushed message: %w", err)
+		}
+	}
+	return nil
 }
 
 // Close closes the queue.
