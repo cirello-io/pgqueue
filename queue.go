@@ -75,6 +75,9 @@ type Client struct {
 	tableName string
 	db        *sql.DB
 	listener  *pq.Listener
+
+	mu            sync.RWMutex
+	subscriptions map[chan struct{}]string
 }
 
 // ClientOption reconfigures the behavior of the pgqueue Client.
@@ -97,11 +100,12 @@ func Open(dsn string, opts ...ClientOption) (*Client, error) {
 	if err := db.Ping(); err != nil {
 		return nil, fmt.Errorf("cannot open database: %w", err)
 	}
-	listener := pq.NewListener(dsn, 1*time.Second, 1*time.Second, func(pq.ListenerEventType, error) {})
+	listener := pq.NewListener(dsn, 1*time.Millisecond, 1*time.Millisecond, func(t pq.ListenerEventType, err error) {})
 	c := &Client{
-		tableName: defaultTableName,
-		db:        db,
-		listener:  listener,
+		tableName:     defaultTableName,
+		db:            db,
+		listener:      listener,
+		subscriptions: make(map[chan struct{}]string),
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -109,7 +113,37 @@ func Open(dsn string, opts ...ClientOption) (*Client, error) {
 	if err := listener.Listen(c.tableName); err != nil {
 		return nil, fmt.Errorf("cannot subscribe for notifications: %w", err)
 	}
+	go c.forwardNotifications()
 	return c, nil
+}
+
+func (c *Client) subscribe(sub chan struct{}, queue string) {
+	c.mu.Lock()
+	c.subscriptions[sub] = queue
+	c.mu.Unlock()
+}
+
+func (c *Client) unsubscribe(sub chan struct{}) {
+	c.mu.Lock()
+	delete(c.subscriptions, sub)
+	c.mu.Unlock()
+}
+
+func (c *Client) forwardNotifications() {
+	for n := range c.listener.NotificationChannel() {
+		c.mu.RLock()
+		for ch, queue := range c.subscriptions {
+			dispatch := n == nil || n.Extra == queue
+			if !dispatch {
+				continue
+			}
+			select {
+			case ch <- struct{}{}:
+			default:
+			}
+		}
+		c.mu.RUnlock()
+	}
 }
 
 // ClientCloseError reports all the errors that happened during client close.
@@ -292,11 +326,13 @@ func (q *Queue) VacuumStats() VacuumStats {
 
 // Watch observes new messages for the target queue.
 func (q *Queue) Watch(lease time.Duration) *Watcher {
-	watcher := &Watcher{
-		queue: q,
-		lease: lease,
+	w := &Watcher{
+		queue:         q,
+		notifications: make(chan struct{}, 1),
+		lease:         lease,
 	}
-	return watcher
+	q.client.subscribe(w.notifications, q.queue)
+	return w
 }
 
 // VacuumStats reports the consequences of the clean up.
@@ -514,10 +550,11 @@ func (q *Queue) runVacuum() {
 // Watcher holds the pointer necessary to listen for postgreSQL events that
 // indicates a new message has arrive in the pipe.
 type Watcher struct {
-	queue *Queue
-	lease time.Duration
-	msg   *Message
-	err   error
+	queue         *Queue
+	notifications chan struct{}
+	lease         time.Duration
+	msg           *Message
+	err           error
 }
 
 // how frequently the next call is going to ping the database if nothing
@@ -526,40 +563,37 @@ const missedNotificationTimer = 5 * time.Second
 
 // Next waits for the next message to arrive and store it into Watcher.
 func (w *Watcher) Next() bool {
+	unsub := func() {
+		w.queue.client.unsubscribe(w.notifications)
+	}
 	if w.err != nil {
+		unsub()
 		return false
 	}
 	if w.queue.isClosed() {
 		w.err = ErrAlreadyClosed
+		unsub()
 		return false
 	}
-	firstLoop := make(chan struct{}, 1)
-	firstLoop <- struct{}{}
-	defer close(firstLoop)
 	for {
-		select {
-		case <-firstLoop:
-		case <-time.After(missedNotificationTimer):
-		case n := <-w.queue.client.listener.Notify:
-			isReconnection := n == nil
-			isOtherQueue := n != nil && n.Extra != w.queue.queue
-			if !isReconnection && isOtherQueue {
-				continue
-			}
-		}
 		switch msg, err := w.queue.Reserve(w.lease); err {
 		case ErrEmptyQueue:
 		case sql.ErrConnDone, ErrAlreadyClosed:
 			w.err = err
+			unsub()
 			return false
 		case nil:
 			w.msg = msg
 			return true
 		default:
 			w.err = err
+			unsub()
 			return false
 		}
-
+		select {
+		case <-w.notifications:
+		case <-time.After(missedNotificationTimer):
+		}
 	}
 }
 
