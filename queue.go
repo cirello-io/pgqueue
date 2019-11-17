@@ -409,6 +409,7 @@ func (q *Queue) DumpDeadLetterQueue(w io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("cannot load dead letter queue messages: %w", err)
 	}
+	defer rows.Close()
 	enc := json.NewEncoder(w)
 	for rows.Next() {
 		var row struct {
