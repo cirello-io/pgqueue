@@ -525,11 +525,11 @@ func (w *Watcher) Next() bool {
 	// how frequently the next call is going to ping the database if nothing
 	// comes from the notification channel.
 	const missedNotificationTimer = 5 * time.Second
-	if w.queue.isClosed() {
-		w.err = ErrAlreadyClosed
+	if w.err != nil {
 		return false
 	}
-	if w.err != nil {
+	if w.queue.isClosed() {
+		w.err = ErrAlreadyClosed
 		return false
 	}
 	for {

@@ -292,3 +292,42 @@ func TestValidationErrors(t *testing.T) {
 		t.Error("expected ErrInvalidDuration:", err)
 	}
 }
+
+func TestWatchNextErrors(t *testing.T) {
+	client, err := Open(dsn)
+	if err != nil {
+		t.Fatal("cannot open database connection:", err)
+	}
+	defer client.Close()
+	t.Run("close while next", func(t *testing.T) {
+		q := client.Queue("close while next", DisableAutoVacuum())
+		w := q.Watch(1 * time.Second)
+		go func() {
+			time.Sleep(1 * time.Second)
+			q.Close()
+		}()
+		if w.Next() {
+			t.Error("unexpected first next=true while closing - should have detected close from Reserve")
+		}
+		if w.Next() {
+			t.Error("unexpected second next=true while closing - should have detected close from w.err")
+		}
+		if err := w.Err(); err != ErrAlreadyClosed {
+			t.Error("expected error not found:", err)
+		}
+	})
+	t.Run("next after close", func(t *testing.T) {
+		q := client.Queue("next after close", DisableAutoVacuum())
+		w := q.Watch(1 * time.Second)
+		q.Close()
+		if w.Next() {
+			t.Error("unexpected first next=true after close - should have detected close from queue")
+		}
+		if w.Next() {
+			t.Error("unexpected second next=true after close - should have detected close from w.err")
+		}
+		if err := w.Err(); err != ErrAlreadyClosed {
+			t.Error("expected error not found:", err)
+		}
+	})
+}
