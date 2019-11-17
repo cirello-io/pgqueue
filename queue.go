@@ -555,16 +555,6 @@ func (m *Message) ID() uint64 {
 	return m.id
 }
 
-// Delete the message from the storage.
-func (m *Message) Delete() error {
-	return m.client.retry(func(tx *sql.Tx) error {
-		if _, err := tx.Exec(`DELETE FROM `+pq.QuoteIdentifier(m.client.tableName)+` WHERE id = $2`, m.id); err != nil {
-			return fmt.Errorf("cannot delete message from the storage: %w", err)
-		}
-		return nil
-	})
-}
-
 // Done mark message as done.
 func (m *Message) Done() error {
 	return m.client.retry(func(tx *sql.Tx) error {
