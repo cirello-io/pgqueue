@@ -355,12 +355,12 @@ func (q *Queue) Vacuum() VacuumStats {
 // is not marked as Done by the lease time, it is returned to the queue. Lease
 // duration must be multiple of milliseconds.
 func (q *Queue) Reserve(lease time.Duration) (*Message, error) {
+	if q.isClosed() {
+		return nil, ErrAlreadyClosed
+	}
 	var message *Message
 	if err := validDuration(lease); err != nil {
 		return nil, err
-	}
-	if q.isClosed() {
-		return nil, ErrAlreadyClosed
 	}
 	err := q.client.retry(func(tx *sql.Tx) (err error) {
 		var (

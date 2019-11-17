@@ -242,14 +242,14 @@ func TestClosedQueue(t *testing.T) {
 	defer client.Close()
 	q := client.Queue("closed-client-queue")
 	q.Close()
-	if err := q.Push(nil); err == nil {
-		t.Error("push on closed queue must fail")
+	if err := q.Push(nil); err != ErrAlreadyClosed {
+		t.Error("push on closed queue must fail with ErrAlreadyClose:", err)
 	}
-	if _, err := q.Pop(); err == nil {
-		t.Error("pop on closed queue must fail")
+	if _, err := q.Pop(); err != ErrAlreadyClosed {
+		t.Error("pop on closed queue must fail with ErrAlreadyClose:", err)
 	}
-	if _, err := q.Reserve(0); err == nil {
-		t.Error("pop on closed queue must fail")
+	if _, err := q.Reserve(0); err != ErrAlreadyClosed {
+		t.Error("reserve on closed queue must fail with ErrAlreadyClose:", err)
 	}
 	w := q.Watch(0)
 	if w.Next() {
