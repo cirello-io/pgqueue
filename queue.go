@@ -167,14 +167,15 @@ func (c *Client) retry(f func(*sql.Tx) error) error {
 func (c *Client) CreateTable() error {
 	return c.retry(func(tx *sql.Tx) error {
 		_, err := tx.Exec(`
+		CREATE SEQUENCE IF NOT EXISTS ` + pq.QuoteIdentifier(c.tableName+"_rvn") + ` AS BIGINT CYCLE;
 		CREATE TABLE IF NOT EXISTS ` + pq.QuoteIdentifier(c.tableName) + ` (
-			id serial,
-			queue varchar,
-			state varchar,
-			deliveries int NOT NULL DEFAULT 0,
+			id SERIAL PRIMARY KEY,
+			rvn BIGINT DEFAULT nextval(` + pq.QuoteLiteral(c.tableName+"_rvn") + `),
+			queue VARCHAR,
+			state VARCHAR,
+			deliveries INT NOT NULL DEFAULT 0,
 			leased_until TIMESTAMP WITHOUT TIME ZONE,
-			content bytea,
-			PRIMARY KEY(id)
+			content BYTEA
 		);
 		CREATE INDEX IF NOT EXISTS ` + pq.QuoteIdentifier(c.tableName+"_pop") + ` ON ` + pq.QuoteIdentifier(c.tableName) + ` (queue, state);
 		CREATE INDEX IF NOT EXISTS ` + pq.QuoteIdentifier(c.tableName+"_vacuum") + ` ON ` + pq.QuoteIdentifier(c.tableName) + ` (queue, state, deliveries, leased_until);
@@ -313,28 +314,37 @@ func (q *Queue) Reserve(lease time.Duration) (*Message, error) {
 		return nil, ErrAlreadyClosed
 	}
 	err := q.client.retry(func(tx *sql.Tx) (err error) {
-		row := tx.QueryRow(`SELECT id, content FROM `+pq.QuoteIdentifier(q.client.tableName)+` WHERE queue = $1 AND state = $2 ORDER BY id ASC LIMIT 1`, q.queue, New)
 		var (
 			id          uint64
 			content     []byte
 			leasedUntil time.Time
 		)
-		if err := row.Scan(&id, &content); err != nil && err != sql.ErrNoRows {
-			return fmt.Errorf("cannot read message: %w", err)
-		} else if err == sql.ErrNoRows {
-			return ErrEmptyQueue
-		}
-		row = tx.QueryRow(`
+		row := tx.QueryRow(`
 			UPDATE `+pq.QuoteIdentifier(q.client.tableName)+`
 			SET
 				deliveries = deliveries + 1,
 				state = $1,
 				leased_until = now() + $2::interval
 			WHERE
-				id = $3
-			RETURNING leased_until`, InProgress, lease.String(), id)
-		if err := row.Scan(&leasedUntil); err != nil {
-			return fmt.Errorf("cannot store message: %w", err)
+				id IN (
+					SELECT
+						id
+					FROM
+						`+pq.QuoteIdentifier(q.client.tableName)+`
+					WHERE
+						queue = $3
+						AND state = $4
+					ORDER BY
+						id ASC
+					LIMIT 1
+					FOR UPDATE
+				)
+			RETURNING id, content, leased_until
+		`, InProgress, lease.String(), q.queue, New)
+		if err := row.Scan(&id, &content, &leasedUntil); err != nil && err != sql.ErrNoRows {
+			return fmt.Errorf("cannot read message: %w", err)
+		} else if err == sql.ErrNoRows {
+			return ErrEmptyQueue
 		}
 		message = &Message{
 			id:          id,
@@ -344,10 +354,7 @@ func (q *Queue) Reserve(lease time.Duration) (*Message, error) {
 		}
 		return nil
 	})
-	if err != nil {
-		return nil, err
-	}
-	return message, nil
+	return message, err
 }
 
 // Push enqueues the given content to the target queue.
@@ -377,15 +384,31 @@ func (q *Queue) Pop() ([]byte, error) {
 	}
 	var content []byte
 	err := q.client.retry(func(tx *sql.Tx) error {
-		row := tx.QueryRow(`SELECT id, content FROM `+pq.QuoteIdentifier(q.client.tableName)+` WHERE queue = $1 AND state = $2 ORDER BY id ASC LIMIT 1`, q.queue, New)
-		var id uint64
-		if err := row.Scan(&id, &content); err != nil && err != sql.ErrNoRows {
+		row := tx.QueryRow(`
+			UPDATE `+pq.QuoteIdentifier(q.client.tableName)+`
+			SET
+				deliveries = deliveries + 1,
+				state = $1
+			WHERE
+				id IN (
+					SELECT
+						id
+					FROM
+						`+pq.QuoteIdentifier(q.client.tableName)+`
+					WHERE
+						queue = $2
+						AND state = $3
+					ORDER BY
+						id ASC
+					LIMIT 1
+					FOR UPDATE
+				)
+			RETURNING content
+		`, Done, q.queue, New)
+		if err := row.Scan(&content); err != nil && err != sql.ErrNoRows {
 			return fmt.Errorf("cannot read message: %w", err)
 		} else if err == sql.ErrNoRows {
 			return ErrEmptyQueue
-		}
-		if _, err := tx.Exec(`UPDATE `+pq.QuoteIdentifier(q.client.tableName)+` SET deliveries = deliveries + 1, state = $1 WHERE id = $2`, Done, id); err != nil {
-			return fmt.Errorf("cannot store message: %w", err)
 		}
 		return nil
 	})

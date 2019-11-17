@@ -125,7 +125,7 @@ func Example_reservation() {
 	}
 	r, err := queue.Reserve(1 * time.Minute)
 	if err != nil {
-		log.Fatalln("cannot pop message from the queue:", err)
+		log.Fatalln("cannot reserve message from the queue:", err)
 	}
 	fmt.Printf("content: %s\n", r.Content)
 	if err := r.Done(); err != nil {
