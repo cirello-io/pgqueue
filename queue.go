@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -111,13 +112,32 @@ func Open(dsn string, opts ...ClientOption) (*Client, error) {
 	return c, nil
 }
 
+// ClientCloseError reports all the errors that happened during client close.
+type ClientCloseError struct {
+	ListenerError error
+	DriverError   error
+}
+
+func (e *ClientCloseError) Error() string {
+	var msgs []string
+	if e.ListenerError != nil {
+		msgs = append(msgs, fmt.Sprintf("listener: %v", e.ListenerError))
+	}
+	if e.DriverError != nil {
+		msgs = append(msgs, fmt.Sprintf("driver: %v", e.DriverError))
+	}
+	return strings.Join(msgs, " | ")
+}
+
 // Close stops the queue system.
 func (c *Client) Close() error {
-	if err := c.listener.Close(); err != nil {
-		return fmt.Errorf("cannot close listener: %w", err)
-	}
-	if err := c.db.Close(); err != nil {
-		return fmt.Errorf("cannot close connection: %w", err)
+	listenerErr := c.listener.Close()
+	driverErr := c.db.Close()
+	if listenerErr != nil || driverErr != nil {
+		return &ClientCloseError{
+			ListenerError: listenerErr,
+			DriverError:   driverErr,
+		}
 	}
 	return nil
 }

@@ -209,3 +209,16 @@ func TestReconfiguredClient(t *testing.T) {
 		t.Log("error:", err)
 	})
 }
+
+func TestCloseError(t *testing.T) {
+	client, err := Open(dsn)
+	if err != nil {
+		t.Fatal("cannot open database connection:", err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatal("first close should always be clean:", err)
+	}
+	if err := client.Close(); err == nil {
+		t.Fatal("second close should always be dirty:", err)
+	}
+}
