@@ -345,7 +345,7 @@ func TestCrossQueueBump(t *testing.T) {
 	qBravo := client.Queue("cross-queue-bump-bravo", DisableAutoVacuum())
 	defer qBravo.Close()
 	watchAlpha := qAlpha.Watch(time.Minute)
-	alphaGotMessage := make(chan bool)
+	alphaGotMessage := make(chan bool, 1)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()

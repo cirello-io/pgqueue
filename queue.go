@@ -533,7 +533,20 @@ func (w *Watcher) Next() bool {
 		w.err = ErrAlreadyClosed
 		return false
 	}
+	firstLoop := make(chan struct{}, 1)
+	firstLoop <- struct{}{}
+	defer close(firstLoop)
 	for {
+		select {
+		case <-firstLoop:
+		case <-time.After(missedNotificationTimer):
+		case n := <-w.queue.client.listener.Notify:
+			isReconnection := n == nil
+			isOtherQueue := n != nil && n.Extra != w.queue.queue
+			if !isReconnection && isOtherQueue {
+				continue
+			}
+		}
 		switch msg, err := w.queue.Reserve(w.lease); err {
 		case ErrEmptyQueue:
 		case sql.ErrConnDone, ErrAlreadyClosed:
@@ -546,10 +559,7 @@ func (w *Watcher) Next() bool {
 			w.err = err
 			return false
 		}
-		select {
-		case <-time.After(missedNotificationTimer):
-		case <-w.queue.client.listener.Notify:
-		}
+
 	}
 }
 
