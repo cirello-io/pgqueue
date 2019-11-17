@@ -458,7 +458,7 @@ func (q *Queue) Push(content []byte) error {
 		if _, err := tx.Exec(`INSERT INTO `+pq.QuoteIdentifier(q.client.tableName)+` (queue, state, content) VALUES ($1, $2, $3)`, q.queue, New, content); err != nil {
 			return fmt.Errorf("cannot store message: %w", err)
 		}
-		if _, err := q.client.db.Exec(`NOTIFY ` + pq.QuoteIdentifier(q.client.tableName) + `, ` + pq.QuoteLiteral(q.queue)); err != nil {
+		if _, err := tx.Exec(`NOTIFY ` + pq.QuoteIdentifier(q.client.tableName) + `, ` + pq.QuoteLiteral(q.queue)); err != nil {
 			return fmt.Errorf("cannot send push notification: %w", err)
 		}
 		return nil
