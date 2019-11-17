@@ -535,8 +535,8 @@ func (w *Watcher) Next() bool {
 	}
 	for {
 		select {
-		case n := <-w.queue.client.listener.Notify:
-			if n.Extra != w.queue.queue {
+		case n, ok := <-w.queue.client.listener.Notify:
+			if ok && n.Extra != w.queue.queue {
 				continue
 			}
 		case <-time.After(missedNotificationTimer):
