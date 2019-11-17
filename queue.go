@@ -317,11 +317,7 @@ type VacuumStats struct {
 func (q *Queue) Vacuum() VacuumStats {
 	var stats VacuumStats
 	err := q.client.retry(func(tx *sql.Tx) (err error) {
-		defer func() {
-			if err != nil {
-				stats = VacuumStats{}
-			}
-		}()
+		stats = VacuumStats{}
 		res, err := tx.Exec(`DELETE FROM `+pq.QuoteIdentifier(q.client.tableName)+` WHERE queue = $1 AND state = $2`, q.queue, Done)
 		if err != nil {
 			return fmt.Errorf("cannot store message: %w", err)
