@@ -422,7 +422,7 @@ func (q *Queue) Push(content []byte) error {
 		if _, err := tx.Exec(`INSERT INTO `+pq.QuoteIdentifier(q.client.tableName)+` (queue, state, content) VALUES ($1, $2, $3)`, q.queue, New, content); err != nil {
 			return fmt.Errorf("cannot store message: %w", err)
 		}
-		if _, err := q.client.db.Exec(`NOTIFY ` + pq.QuoteIdentifier(q.client.tableName) + `, ` + pq.QuoteLiteral(q.queue)); err != nil {
+		if _, err := q.client.db.Exec(`NOTIFY ` + pq.QuoteIdentifier(q.client.tableName)); err != nil {
 			return fmt.Errorf("cannot send push notification: %w", err)
 		}
 		return nil
@@ -534,10 +534,7 @@ func (w *Watcher) Next() bool {
 	}
 	for {
 		select {
-		case n := <-w.queue.client.listener.Notify:
-			if n.Extra != w.queue.queue {
-				continue
-			}
+		case <-w.queue.client.listener.Notify:
 		case <-time.After(missedNotificationTimer):
 			// Is the server still alive?
 			go w.queue.client.listener.Ping()
