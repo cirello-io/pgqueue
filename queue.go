@@ -574,11 +574,6 @@ type Message struct {
 	client      *Client
 }
 
-// ID is the message internal ID.
-func (m *Message) ID() uint64 {
-	return m.id
-}
-
 // Done mark message as done.
 func (m *Message) Done() error {
 	return m.client.retry(func(tx *sql.Tx) error {
