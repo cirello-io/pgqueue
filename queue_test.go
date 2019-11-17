@@ -157,7 +157,7 @@ func TestDeadletterDump(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := queue.DumpDeadLetterQueue(&buf); err != nil {
+	if err := client.DumpDeadLetterQueue("example-deadletter-queue", &buf); err != nil {
 		t.Fatal("cannot dump dead letter queue")
 	}
 	t.Log(buf.String())
@@ -231,5 +231,34 @@ func TestCloseError(t *testing.T) {
 		t.Fatal("second close should always be dirty:", err)
 	} else {
 		t.Log("expected error found:", err)
+	}
+}
+
+func TestClosedQueue(t *testing.T) {
+	client, err := Open(dsn)
+	if err != nil {
+		t.Fatal("cannot open database connection:", err)
+	}
+	defer client.Close()
+	q := client.Queue("closed-client-queue")
+	q.Close()
+	if err := q.Push(nil); err == nil {
+		t.Error("push on closed queue must fail")
+	}
+	if _, err := q.Pop(); err == nil {
+		t.Error("pop on closed queue must fail")
+	}
+	if _, err := q.Reserve(0); err == nil {
+		t.Error("pop on closed queue must fail")
+	}
+	w := q.Watch(0)
+	if w.Next() {
+		t.Error("Watcher.Next on closed queue must be false")
+	}
+	if err := w.Err(); err != ErrAlreadyClosed {
+		t.Error("Watcher.Err() on closed queue must errors with ErrAlreadyClosed:", err)
+	}
+	if err := q.Close(); err != ErrAlreadyClosed {
+		t.Error("close on closed queue must error with ErrAlreadyClosed:", err)
 	}
 }
