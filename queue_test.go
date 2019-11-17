@@ -340,6 +340,9 @@ func TestCrossQueueBump(t *testing.T) {
 		t.Fatal("cannot open database connection:", err)
 	}
 	defer client.Close()
+	if err := client.CreateTable(); err != nil {
+		t.Fatal("cannot create queue table:", err)
+	}
 	qAlpha := client.Queue("cross-queue-bump-alpha", DisableAutoVacuum())
 	defer qAlpha.Close()
 	qBravo := client.Queue("cross-queue-bump-bravo", DisableAutoVacuum())
