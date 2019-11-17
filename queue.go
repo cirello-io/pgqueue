@@ -18,10 +18,39 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/lib/pq"
 )
+
+// ErrEmptyQueue indicates there isn't any message available at the head of the
+// queue.
+var ErrEmptyQueue = fmt.Errorf("empty queue")
+
+// ErrMessageTooLarge indicates the content to be pushed is too large.
+var ErrMessageTooLarge = fmt.Errorf("message is too large")
+
+// ErrAlreadyClosed indicates the queue is closed and all its watchers are going
+// to report the queue is no longer available.
+var ErrAlreadyClosed = errors.New("queue is already closed")
+
+// ErrInvalidDuration indicates the duration used is too small. It must larger
+// than a millisecond and be multiple of a millisecond.
+var ErrInvalidDuration = errors.New("invalid duration")
+
+// MaxMessageLength indicates the maximum content length acceptable for new
+// messages. Although it is theoretically possible to use large messages, the
+// idea here is to be conservative until the properties of PostgreSQL are fully
+// mapped.
+const MaxMessageLength = 65536
+
+// DefaultMaxRetries is how many tries each message gets before getting skipped
+// on Pop and Reserve calls.
+const DefaultMaxRetries = 5
+
+// DefaultDeadLetterQueueName indicates the name of the dead letter queue.
+const DefaultDeadLetterQueueName = "deadletter"
 
 // reasonable defaults
 const (
@@ -45,17 +74,31 @@ type Client struct {
 	listener  *pq.Listener
 }
 
+// ClientOption reconfigures the behavior of the pgqueue Client.
+type ClientOption func(*Client)
+
+// WithCustomTable changes the name of the postgresql table used for the queue.
+func WithCustomTable(tableName string) ClientOption {
+	return func(c *Client) {
+		c.tableName = tableName
+	}
+}
+
 // Open uses the given database connection and start operating the queue system.
-func Open(dsn string) (*Client, error) {
+func Open(dsn string, opts ...ClientOption) (*Client, error) {
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("cannot open database connection: %w", err)
 	}
-	return &Client{
+	c := &Client{
 		tableName: defaultTableName,
 		db:        db,
 		listener:  pq.NewListener(dsn, 1*time.Second, 1*time.Second, func(pq.ListenerEventType, error) {}),
-	}, nil
+	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c, nil
 }
 
 // Close stops the queue system.
@@ -67,6 +110,24 @@ func (c *Client) Close() error {
 		return fmt.Errorf("cannot close connection: %w", err)
 	}
 	return nil
+}
+
+// Queue configures a queue.
+func (c *Client) Queue(queue string, opts ...QueueOption) *Queue {
+	q := &Queue{
+		client:     c,
+		queue:      queue,
+		maxRetries: DefaultMaxRetries,
+		autoVacuum: true,
+		closed:     make(chan struct{}),
+	}
+	for _, opt := range opts {
+		opt(q)
+	}
+	if q.autoVacuum {
+		go q.runVacuum()
+	}
+	return q
 }
 
 func (c *Client) tx() (*sql.Tx, error) {
@@ -117,25 +178,189 @@ CREATE TABLE IF NOT EXISTS ` + pq.QuoteIdentifier(c.tableName) + ` (
 	return nil
 }
 
+// Queue holds the configuration definition for one queue.
+type Queue struct {
+	client *Client
+
+	queue      string
+	maxRetries int
+	autoVacuum bool
+	closeOnce  sync.Once
+	closed     chan struct{}
+
+	muStats     sync.RWMutex
+	vacuumStats VacuumStats
+}
+
+// QueueOption reconfigure queue at invocation time.
+type QueueOption func(q *Queue)
+
+// WithCustomRetries indicates how many retries each message gets. If zero, the
+// client retries the message forever.
+func WithCustomRetries(retries int) QueueOption {
+	return func(q *Queue) {
+		q.maxRetries = retries
+	}
+}
+
+// DisableAutoVacuum forces the use of manual queue clean up.
+func DisableAutoVacuum() QueueOption {
+	return func(q *Queue) {
+		q.autoVacuum = false
+	}
+}
+
+// VacuumStats reports the result of the last vacuum cycle.
+func (q *Queue) VacuumStats() VacuumStats {
+	q.muStats.RLock()
+	defer q.muStats.RUnlock()
+	return q.vacuumStats
+}
+
+// Watch observes new messages for the target queue.
+func (q *Queue) Watch() *Watcher {
+	watcher := &Watcher{
+		queue: q,
+	}
+	watcher.err = q.client.listener.Listen(q.queue)
+	return watcher
+}
+
+// VacuumStats reports the consequences of the clean up.
+type VacuumStats struct {
+	// Done reports how many messages marked as Done were deleted.
+	Done int64
+	// Recovered reports how many expired messages marked as InProgress but
+	// low retry count were recovered.
+	Recovered int64
+	// Dead reports how many expired messages marked as InProgress but with
+	// high retry count were moved to the deadletter queue.
+	Dead int64
+	// Error indicates why the vacuum cycle failed. If nil, it succeeded.
+	Error error
+}
+
+// Vacuum cleans up the queue from done or dead messages.
+func (q *Queue) Vacuum() VacuumStats {
+	var stats VacuumStats
+	err := q.client.retry(func() error {
+		tx, err := q.client.tx()
+		if err != nil {
+			return fmt.Errorf("cannot create transaction for queue vacuum: %w", err)
+		}
+		defer tx.Rollback()
+		res, err := tx.Exec(`DELETE FROM `+pq.QuoteIdentifier(q.client.tableName)+` WHERE queue = $1 AND state = $2`, q.queue, Done)
+		if err != nil {
+			return fmt.Errorf("cannot store message: %w", err)
+		}
+		stats.Done, err = res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("cannot calculate how many done messages were deleted: %w", err)
+		}
+		if q.maxRetries > 0 {
+			res, err = tx.Exec(`UPDATE `+pq.QuoteIdentifier(q.client.tableName)+` SET queue = $1 WHERE queue = $2 AND state = $3 AND tries > $4 AND leased_until < NOW()`, DefaultDeadLetterQueueName, q.queue, InProgress, q.maxRetries)
+			if err != nil {
+				return fmt.Errorf("cannot move messaged to dead letter queue: %w", err)
+			}
+			stats.Dead, err = res.RowsAffected()
+			if err != nil {
+				return fmt.Errorf("cannot calculate how many messages were moved to the dead letter queue: %w", err)
+			}
+			res, err = tx.Exec(`UPDATE `+pq.QuoteIdentifier(q.client.tableName)+` SET state = $1 WHERE queue = $2 AND state = $3 AND tries <= $4 AND leased_until < NOW()`, New, q.queue, InProgress, q.maxRetries)
+			if err != nil {
+				return fmt.Errorf("cannot recover messages: %w", err)
+			}
+			stats.Recovered, err = res.RowsAffected()
+			if err != nil {
+				return fmt.Errorf("cannot calculate how many messages were recovered: %w", err)
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("cannot commit message push transaction: %w", err)
+		}
+		return nil
+	})
+	stats.Error = err
+	return stats
+}
+
+// Reserve retrieves the pending message from the queue, if any available. It
+// marks as it as InProgress until the defined lease duration. If the message
+// is not marked as Done by the lease time, it is returned to the queue. Lease
+// duration must be multiple of milliseconds.
+func (q *Queue) Reserve(lease time.Duration) (*Message, error) {
+	var message *Message
+	if err := validDuration(lease); err != nil {
+		return message, err
+	}
+	if q.isClosed() {
+		return message, ErrAlreadyClosed
+	}
+	err := q.client.retry(func() error {
+		tx, err := q.client.tx()
+		if err != nil {
+			return fmt.Errorf("cannot create transaction for message pop: %w", err)
+		}
+		defer tx.Rollback()
+		row := tx.QueryRow(`SELECT id, content FROM `+pq.QuoteIdentifier(q.client.tableName)+` WHERE queue = $1 AND state = $2 ORDER BY id ASC LIMIT 1`, q.queue, New)
+		var (
+			id          uint64
+			content     []byte
+			leasedUntil time.Time
+		)
+		if err := row.Scan(&id, &content); err != nil && err != sql.ErrNoRows {
+			return fmt.Errorf("cannot read message: %w", err)
+		} else if err == sql.ErrNoRows {
+			return ErrEmptyQueue
+		}
+		row = tx.QueryRow(`
+			UPDATE `+pq.QuoteIdentifier(q.client.tableName)+`
+			SET
+				tries = tries + 1,
+				state = $1,
+				leased_until = now() + $2::interval
+			WHERE
+				id = $3
+			RETURNING leased_until`, InProgress, lease.String(), id)
+		if err := row.Scan(&leasedUntil); err != nil {
+			return fmt.Errorf("cannot store message: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("cannot commit message pop transaction: %w", err)
+		}
+		message = &Message{
+			id:          id,
+			Content:     content,
+			LeasedUntil: leasedUntil,
+			client:      q.client,
+		}
+		return nil
+	})
+	return message, err
+}
+
 // Push enqueues the given content to the target queue.
-func (c *Client) Push(target string, content []byte) error {
-	if err := validate(content); err != nil {
+func (q *Queue) Push(content []byte) error {
+	if q.isClosed() {
+		return ErrAlreadyClosed
+	}
+	if err := validMessageSize(content); err != nil {
 		return err
 	}
-	return c.retry(func() error {
-		tx, err := c.tx()
+	return q.client.retry(func() error {
+		tx, err := q.client.tx()
 		if err != nil {
 			return fmt.Errorf("cannot create transaction for message push: %w", err)
 		}
 		defer tx.Rollback()
-		_, err = tx.Exec(`INSERT INTO `+pq.QuoteIdentifier(c.tableName)+` (queue, state, content) VALUES ($1, $2, $3)`, target, New, content)
+		_, err = tx.Exec(`INSERT INTO `+pq.QuoteIdentifier(q.client.tableName)+` (queue, state, content) VALUES ($1, $2, $3)`, q.queue, New, content)
 		if err != nil {
 			return fmt.Errorf("cannot store message: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("cannot commit message push transaction: %w", err)
 		}
-		_, err = c.db.Exec(`NOTIFY ` + pq.QuoteIdentifier(target))
+		_, err = q.client.db.Exec(`NOTIFY ` + pq.QuoteIdentifier(q.queue))
 		if err != nil {
 			return fmt.Errorf("cannot send push notification: %w", err)
 		}
@@ -143,28 +368,27 @@ func (c *Client) Push(target string, content []byte) error {
 	})
 }
 
-// ErrEmptyQueue indicates there isn't any message available at the head of the
-// queue.
-var ErrEmptyQueue = fmt.Errorf("empty queue")
-
 // Pop retrieves the pending message from the queue, if any available. If the
 // queue is empty, it returns ErrEmptyQueue.
-func (c *Client) Pop(target string) ([]byte, error) {
+func (q *Queue) Pop() ([]byte, error) {
+	if q.isClosed() {
+		return nil, ErrAlreadyClosed
+	}
 	var content []byte
-	err := c.retry(func() error {
-		tx, err := c.tx()
+	err := q.client.retry(func() error {
+		tx, err := q.client.tx()
 		if err != nil {
 			return fmt.Errorf("cannot create transaction for message pop: %w", err)
 		}
 		defer tx.Rollback()
-		row := tx.QueryRow(`SELECT id, content FROM `+pq.QuoteIdentifier(c.tableName)+` WHERE queue = $1 AND state = $2 ORDER BY id ASC LIMIT 1`, target, New)
+		row := tx.QueryRow(`SELECT id, content FROM `+pq.QuoteIdentifier(q.client.tableName)+` WHERE queue = $1 AND state = $2 ORDER BY id ASC LIMIT 1`, q.queue, New)
 		var id uint64
 		if err := row.Scan(&id, &content); err != nil && err != sql.ErrNoRows {
 			return fmt.Errorf("cannot read message: %w", err)
 		} else if err == sql.ErrNoRows {
 			return ErrEmptyQueue
 		}
-		if _, err := tx.Exec(`UPDATE `+pq.QuoteIdentifier(c.tableName)+` SET tries = tries + 1, state = $1 WHERE id = $2`, Done, id); err != nil {
+		if _, err := tx.Exec(`UPDATE `+pq.QuoteIdentifier(q.client.tableName)+` SET tries = tries + 1, state = $1 WHERE id = $2`, Done, id); err != nil {
 			return fmt.Errorf("cannot store message: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
@@ -175,193 +399,76 @@ func (c *Client) Pop(target string) ([]byte, error) {
 	return content, err
 }
 
-// Reserve retrieves the pending message from the queue, if any available. It
-// marks as it as InProgress until the defined lease duration. If the message
-// is not marked as Done by the lease time, it is returned to the queue.
-func (c *Client) Reserve(target string, lease time.Duration) (*Message, error) {
-	var message *Message
-	err := c.retry(func() error {
-		tx, err := c.tx()
-		if err != nil {
-			return fmt.Errorf("cannot create transaction for message pop: %w", err)
-		}
-		defer tx.Rollback()
-		row := tx.QueryRow(`SELECT id, content FROM `+pq.QuoteIdentifier(c.tableName)+` WHERE queue = $1 AND state = $2 ORDER BY id ASC LIMIT 1`, target, New)
-		var id uint64
-		var content []byte
-		leasedUntil := time.Now().UTC().Add(lease)
-		if err := row.Scan(&id, &content); err != nil && err != sql.ErrNoRows {
-			return fmt.Errorf("cannot read message: %w", err)
-		} else if err == sql.ErrNoRows {
-			return ErrEmptyQueue
-		}
-		if _, err := tx.Exec(`UPDATE `+pq.QuoteIdentifier(c.tableName)+` SET tries = tries + 1, state = $1, leased_until = $2 WHERE id = $3`, InProgress, leasedUntil, id); err != nil {
-			return fmt.Errorf("cannot store message: %w", err)
-		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("cannot commit message pop transaction: %w", err)
-		}
-		message = &Message{
-			id:          id,
-			Content:     content,
-			LeasedUntil: leasedUntil,
-			q:           c,
-		}
-		return nil
+// Close closes the queue.
+func (q *Queue) Close() error {
+	err := ErrAlreadyClosed
+	q.closeOnce.Do(func() {
+		close(q.closed)
+		err = nil
 	})
-	return message, err
+	return err
 }
 
-func (c *Client) done(id uint64) error {
-	return c.retry(func() error {
-		tx, err := c.tx()
-		if err != nil {
-			return fmt.Errorf("cannot create transaction for done message: %w", err)
-		}
-		defer tx.Rollback()
-		if _, err := tx.Exec(`UPDATE `+pq.QuoteIdentifier(c.tableName)+` SET state = $1 WHERE id = $2`, Done, id); err != nil {
-			return fmt.Errorf("cannot store message: %w", err)
-		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("cannot commit done message transaction: %w", err)
-		}
-		return nil
-	})
-}
-
-func (c *Client) release(id uint64) error {
-	return c.retry(func() error {
-		tx, err := c.tx()
-		if err != nil {
-			return fmt.Errorf("cannot create transaction for message release: %w", err)
-		}
-		defer tx.Rollback()
-		if _, err := tx.Exec(`UPDATE `+pq.QuoteIdentifier(c.tableName)+` SET leased_until = null, state = $1 WHERE id = $2`, New, id); err != nil {
-			return fmt.Errorf("cannot store message: %w", err)
-		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("cannot commit message release transaction: %w", err)
-		}
-		return nil
-	})
-}
-
-func (c *Client) touch(id uint64, extension time.Duration) error {
-	return c.retry(func() error {
-		tx, err := c.tx()
-		if err != nil {
-			return fmt.Errorf("cannot create transaction for message touch: %w", err)
-		}
-		defer tx.Rollback()
-		leasedUntil := time.Now().UTC().Add(extension)
-		if _, err := tx.Exec(`UPDATE `+pq.QuoteIdentifier(c.tableName)+` SET leased_until = $1 WHERE id = $2`, leasedUntil, id); err != nil {
-			return fmt.Errorf("cannot store message: %w", err)
-		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("cannot commit message touch transaction: %w", err)
-		}
-		return nil
-	})
-}
-
-// Vacuum cleans up the queue from done or dead messages.
-func (c *Client) Vacuum(target string) (VacuumStats, error) {
-	var stats VacuumStats
-	err := c.retry(func() error {
-		tx, err := c.tx()
-		if err != nil {
-			return fmt.Errorf("cannot create transaction for queue vacuum: %w", err)
-		}
-		defer tx.Rollback()
-		res, err := tx.Exec(`DELETE FROM `+pq.QuoteIdentifier(c.tableName)+` WHERE queue = $1 AND state = $2`, target, Done)
-		if err != nil {
-			return fmt.Errorf("cannot store message: %w", err)
-		}
-		stats.Done, err = res.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("cannot calculate how many done messages were deleted: %w", err)
-		}
-		res, err = tx.Exec(`DELETE FROM `+pq.QuoteIdentifier(c.tableName)+` WHERE queue = $1 AND state = $2 AND leased_until < NOW()`, target, InProgress)
-		if err != nil {
-			return fmt.Errorf("cannot store message: %w", err)
-		}
-		stats.Deads, err = res.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("cannot calculate how many done messages were deleted: %w", err)
-		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("cannot commit message push transaction: %w", err)
-		}
-		return nil
-	})
-	return stats, err
-}
-
-// VacuumStats reports the consequences of the clean up.
-type VacuumStats struct {
-	// Done reports how many messages marked as Done were deleted.
-	Done int64
-	// Deads reports how many messages marked as InProgress but with expired
-	// leases were deleted.
-	Deads int64
-}
-
-// ErrMessageTooLarge indicates the content to be pushed is too large.
-var ErrMessageTooLarge = fmt.Errorf("message is too large")
-
-// MaxMessageLength indicates the maximum content length acceptable for new
-// messages. Although it is theoretically possible to use large messages, the
-// idea here is to be conservative until the properties of PostgreSQL are fully
-// mapped.
-const MaxMessageLength = 65536
-
-func validate(content []byte) error {
-	if len(content) > MaxMessageLength {
-		return ErrMessageTooLarge
+func (q *Queue) isClosed() bool {
+	select {
+	case <-q.closed:
+		return true
+	default:
+		return false
 	}
-	return nil
+}
+
+func (q *Queue) runVacuum() {
+	for {
+
+		select {
+		case <-q.closed:
+			return
+		case <-time.After(1 * time.Minute):
+			stats := q.Vacuum()
+			q.muStats.Lock()
+			q.vacuumStats.Done += stats.Done
+			q.vacuumStats.Recovered += stats.Recovered
+			q.vacuumStats.Dead += stats.Dead
+			q.vacuumStats.Error = stats.Error
+			q.muStats.Unlock()
+		}
+	}
 }
 
 // Watcher holds the pointer necessary to listen for postgreSQL events that
 // indicates a new message has arrive in the pipe.
 type Watcher struct {
-	queue  string
-	client *Client
-	msg    []byte
-	err    error
-}
-
-// Watch observes new messages for the target queue.
-func (c *Client) Watch(queue string) *Watcher {
-	watcher := &Watcher{
-		queue:  queue,
-		client: c,
-	}
-	watcher.err = c.listener.Listen(queue)
-	return watcher
+	queue *Queue
+	msg   []byte
+	err   error
 }
 
 // Next waits for the next message to arrive and store it into Watcher.
 func (w *Watcher) Next() bool {
+	// how frequently the next call is going to ping the database if nothing
+	// comes from the notification channel.
+	const missedNotificationTimer = 5 * time.Second
 	if w.err != nil {
 		return false
 	}
 	for {
 		select {
-		case _, ok := <-w.client.listener.Notify:
+		case _, ok := <-w.queue.client.listener.Notify:
 			if !ok {
 				return false
 			}
-		case <-time.After(5 * time.Second):
+		case <-time.After(missedNotificationTimer):
 		}
-		msg, err := w.client.Pop(w.queue)
-		if err == sql.ErrConnDone {
-			return false
-		} else if err == ErrEmptyQueue {
+		switch msg, err := w.queue.Pop(); err {
+		case ErrEmptyQueue:
 			continue
+		case sql.ErrConnDone, ErrAlreadyClosed:
+			return false
+		default:
+			w.msg = msg
+			return true
 		}
-		w.msg = msg
-		return true
 	}
 }
 
@@ -380,20 +487,78 @@ type Message struct {
 	id          uint64
 	Content     []byte
 	LeasedUntil time.Time
-	q           *Client
+	client      *Client
 }
 
 // Done mark message as done.
 func (m *Message) Done() error {
-	return m.q.done(m.id)
+	return m.client.retry(func() error {
+		tx, err := m.client.tx()
+		if err != nil {
+			return fmt.Errorf("cannot create transaction for done message: %w", err)
+		}
+		defer tx.Rollback()
+		if _, err := tx.Exec(`UPDATE `+pq.QuoteIdentifier(m.client.tableName)+` SET state = $1 WHERE id = $2`, Done, m.id); err != nil {
+			return fmt.Errorf("cannot store message: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("cannot commit done message transaction: %w", err)
+		}
+		return nil
+	})
 }
 
 // Release put the message back to the queue.
 func (m *Message) Release() error {
-	return m.q.release(m.id)
+	return m.client.retry(func() error {
+		tx, err := m.client.tx()
+		if err != nil {
+			return fmt.Errorf("cannot create transaction for message release: %w", err)
+		}
+		defer tx.Rollback()
+		if _, err := tx.Exec(`UPDATE `+pq.QuoteIdentifier(m.client.tableName)+` SET leased_until = null, state = $1 WHERE id = $2`, New, m.id); err != nil {
+			return fmt.Errorf("cannot store message: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("cannot commit message release transaction: %w", err)
+		}
+		return nil
+	})
 }
 
-// Touch extends the lease by the given duration
+// Touch extends the lease by the given duration. The duration must be multiples
+// of milliseconds.
 func (m *Message) Touch(extension time.Duration) error {
-	return m.q.touch(m.id, extension)
+	if err := validDuration(extension); err != nil {
+		return err
+	}
+	return m.client.retry(func() error {
+		tx, err := m.client.tx()
+		if err != nil {
+			return fmt.Errorf("cannot create transaction for message touch: %w", err)
+		}
+		defer tx.Rollback()
+		if _, err := tx.Exec(`UPDATE `+pq.QuoteIdentifier(m.client.tableName)+` SET leased_until = now() + $1::interval WHERE id = $2`, extension.String(), m.id); err != nil {
+			return fmt.Errorf("cannot store message: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("cannot commit message touch transaction: %w", err)
+		}
+		return nil
+	})
+}
+
+func validDuration(d time.Duration) error {
+	valid := d > time.Millisecond && d%time.Millisecond == 0
+	if !valid {
+		return ErrInvalidDuration
+	}
+	return nil
+}
+
+func validMessageSize(content []byte) error {
+	if len(content) > MaxMessageLength {
+		return ErrMessageTooLarge
+	}
+	return nil
 }

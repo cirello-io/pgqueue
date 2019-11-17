@@ -24,18 +24,20 @@ import (
 )
 
 func Example_basic() {
-	queue, err := pgqueue.Open(*dsn)
+	client, err := pgqueue.Open(*dsn)
 	if err != nil {
 		log.Fatalln("cannot open database connection:", err)
 	}
-	if err := queue.CreateTable(); err != nil {
+	if err := client.CreateTable(); err != nil {
 		log.Fatalln("cannot create queue table:", err)
 	}
+	queue := client.Queue("example-queue-name")
+	defer queue.Close()
 	content := []byte("content")
-	if err := queue.Push("queue-name", content); err != nil {
+	if err := queue.Push(content); err != nil {
 		log.Fatalln("cannot push message to queue:", err)
 	}
-	poppedContent, err := queue.Pop("queue-name")
+	poppedContent, err := queue.Pop()
 	if err != nil {
 		log.Fatalln("cannot pop message from the queue:", err)
 	}
@@ -45,41 +47,47 @@ func Example_basic() {
 }
 
 func Example_emptyQueue() {
-	queue, err := pgqueue.Open(*dsn)
+	client, err := pgqueue.Open(*dsn)
 	if err != nil {
 		log.Fatalln("cannot open database connection:", err)
 	}
-	if err := queue.CreateTable(); err != nil {
+	if err := client.CreateTable(); err != nil {
 		log.Fatalln("cannot create queue table:", err)
 	}
-	_, err = queue.Pop("empty-name")
+	queue := client.Queue("empty-name")
+	defer queue.Close()
+	_, err = queue.Pop()
 	fmt.Println("err:", err)
 	// Output:
 	// err: empty queue
 }
 
 func Example_largeMessage() {
-	queue, err := pgqueue.Open(*dsn)
+	client, err := pgqueue.Open(*dsn)
 	if err != nil {
 		log.Fatalln("cannot open database connection:", err)
 	}
-	if err := queue.CreateTable(); err != nil {
+	if err := client.CreateTable(); err != nil {
 		log.Fatalln("cannot create queue table:", err)
 	}
+	queue := client.Queue("example-queue-large-message")
+	defer queue.Close()
 	content := bytes.Repeat([]byte{0}, pgqueue.MaxMessageLength+1)
-	err = queue.Push("queue-large-message", content)
+	err = queue.Push(content)
 	fmt.Println("err:", err)
 	// Output:
 	// err: message is too large
 }
 
 func Example_listen() {
-	queue, err := pgqueue.Open(*dsn)
+	client, err := pgqueue.Open(*dsn)
 	if err != nil {
 		log.Fatalln("cannot open database connection:", err)
 	}
-	go queue.Push("queue-listen", []byte("content"))
-	watch := queue.Watch("queue-listen")
+	queue := client.Queue("example-queue-listen")
+	defer queue.Close()
+	go queue.Push([]byte("content"))
+	watch := queue.Watch()
 	for watch.Next() {
 		fmt.Printf("msg: %s\n", watch.Message())
 		queue.Close()
@@ -92,18 +100,20 @@ func Example_listen() {
 }
 
 func Example_reservation() {
-	queue, err := pgqueue.Open(*dsn)
+	client, err := pgqueue.Open(*dsn)
 	if err != nil {
 		log.Fatalln("cannot open database connection:", err)
 	}
-	if err := queue.CreateTable(); err != nil {
+	if err := client.CreateTable(); err != nil {
 		log.Fatalln("cannot create queue table:", err)
 	}
+	queue := client.Queue("example-queue-reservation")
+	defer queue.Close()
 	content := []byte("content")
-	if err := queue.Push("queue-reservation", content); err != nil {
+	if err := queue.Push(content); err != nil {
 		log.Fatalln("cannot push message to queue:", err)
 	}
-	r, err := queue.Reserve("queue-reservation", 1*time.Minute)
+	r, err := queue.Reserve(1 * time.Minute)
 	if err != nil {
 		log.Fatalln("cannot pop message from the queue:", err)
 	}
@@ -116,18 +126,20 @@ func Example_reservation() {
 }
 
 func Example_reservedReleased() {
-	queue, err := pgqueue.Open(*dsn)
+	client, err := pgqueue.Open(*dsn)
 	if err != nil {
 		log.Fatalln("cannot open database connection:", err)
 	}
-	if err := queue.CreateTable(); err != nil {
+	if err := client.CreateTable(); err != nil {
 		log.Fatalln("cannot create queue table:", err)
 	}
+	queue := client.Queue("example-queue-release")
+	defer queue.Close()
 	content := []byte("content")
-	if err := queue.Push("queue-release", content); err != nil {
+	if err := queue.Push(content); err != nil {
 		log.Fatalln("cannot push message to queue:", err)
 	}
-	r, err := queue.Reserve("queue-release", 1*time.Minute)
+	r, err := queue.Reserve(1 * time.Minute)
 	if err != nil {
 		log.Fatalln("cannot pop message from the queue:", err)
 	}
@@ -140,18 +152,20 @@ func Example_reservedReleased() {
 }
 
 func Example_reservedTouch() {
-	queue, err := pgqueue.Open(*dsn)
+	client, err := pgqueue.Open(*dsn)
 	if err != nil {
 		log.Fatalln("cannot open database connection:", err)
 	}
-	if err := queue.CreateTable(); err != nil {
+	if err := client.CreateTable(); err != nil {
 		log.Fatalln("cannot create queue table:", err)
 	}
+	queue := client.Queue("example-queue-touch")
+	defer queue.Close()
 	content := []byte("content")
-	if err := queue.Push("queue-touch", content); err != nil {
+	if err := queue.Push(content); err != nil {
 		log.Fatalln("cannot push message to queue:", err)
 	}
-	r, err := queue.Reserve("queue-touch", 10*time.Second)
+	r, err := queue.Reserve(10 * time.Second)
 	if err != nil {
 		log.Fatalln("cannot pop message from the queue:", err)
 	}
@@ -165,39 +179,84 @@ func Example_reservedTouch() {
 }
 
 func Example_vacuum() {
-	queue, err := pgqueue.Open(*dsn)
+	const reservationTime = 500 * time.Millisecond
+	client, err := pgqueue.Open(*dsn)
 	if err != nil {
 		log.Fatalln("cannot open database connection:", err)
 	}
-	if err := queue.CreateTable(); err != nil {
+	if err := client.CreateTable(); err != nil {
 		log.Fatalln("cannot create queue table:", err)
 	}
+	queue := client.Queue(
+		"example-queue-vacuum",
+		pgqueue.WithCustomRetries(1),
+		pgqueue.DisableAutoVacuum(),
+	)
+	defer queue.Close()
 	for i := 0; i < 10; i++ {
 		content := []byte("content")
-		if err := queue.Push("queue-vacuum", content); err != nil {
+		if err := queue.Push(content); err != nil {
 			log.Fatalln("cannot push message to queue:", err)
 		}
-		if _, err := queue.Pop("queue-vacuum"); err != nil {
+		if _, err := queue.Pop(); err != nil {
 			log.Fatalln("cannot pop message from the queue:", err)
 		}
 	}
-	for i := 0; i < 10; i++ {
-		content := []byte("content")
-		if err := queue.Push("queue-vacuum", content); err != nil {
-			log.Fatalln("cannot push message to queue:", err)
-		}
-		if _, err := queue.Reserve("queue-vacuum", time.Second); err != nil {
-			log.Fatalln("cannot reserve message from the queue:", err)
-		}
-	}
-	time.Sleep(time.Second)
-	stats, err := queue.Vacuum("queue-vacuum")
-	if err != nil {
+	stats := queue.Vacuum()
+	if stats.Error != nil {
 		log.Fatalln("cannot clean up queue:", err)
 	}
-	fmt.Println("done message count:", stats.Done)
-	fmt.Println("dead message count:", stats.Deads)
+	fmt.Println("first clean up: get rid of the done messages")
+	fmt.Println("- done message count:", stats.Done)
+	fmt.Println("- recovered message count:", stats.Recovered)
+	fmt.Println("- dead message count:", stats.Dead)
+
+	for i := 0; i < 10; i++ {
+		content := []byte("content")
+		if err := queue.Push(content); err != nil {
+			log.Fatalln("cannot push message to queue:", err)
+		}
+		if _, err := queue.Reserve(reservationTime); err != nil {
+			log.Fatalln("cannot reserve message from the queue (first try):", err)
+		}
+	}
+	time.Sleep(2 * reservationTime)
+	stats = queue.Vacuum()
+	if stats.Error != nil {
+		log.Fatalln("cannot clean up queue:", err)
+	}
+	fmt.Println("second clean up: recove messages that timed out")
+	fmt.Println("- done message count:", stats.Done)
+	fmt.Println("- recovered message count:", stats.Recovered)
+	fmt.Println("- dead message count:", stats.Dead)
+
+	for i := 0; i < 10; i++ {
+		if _, err := queue.Reserve(reservationTime); err != nil {
+			fmt.Println("cannot reserve message from the queue (third try):", err)
+			return
+		}
+	}
+	time.Sleep(2 * reservationTime)
+	stats = queue.Vacuum()
+	if stats.Error != nil {
+		log.Fatalln("cannot clean up queue:", err)
+	}
+	fmt.Println("third clean up: move bad messages to dead letter queue")
+	fmt.Println("- done message count:", stats.Done)
+	fmt.Println("- recovered message count:", stats.Recovered)
+	fmt.Println("- dead message count:", stats.Dead)
+
 	// Output:
-	// done message count: 10
-	// dead message count: 10
+	// first clean up: get rid of the done messages
+	// - done message count: 10
+	// - recovered message count: 0
+	// - dead message count: 0
+	// second clean up: recove messages that timed out
+	// - done message count: 0
+	// - recovered message count: 10
+	// - dead message count: 0
+	// third clean up: move bad messages to dead letter queue
+	// - done message count: 0
+	// - recovered message count: 0
+	// - dead message count: 10
 }
