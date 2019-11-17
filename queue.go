@@ -173,8 +173,12 @@ func (c *Client) CreateTable() error {
 			state varchar,
 			deliveries int NOT NULL DEFAULT 0,
 			leased_until TIMESTAMP WITHOUT TIME ZONE,
-			content bytea
-		);`)
+			content bytea,
+			PRIMARY KEY(id)
+		);
+		CREATE INDEX ` + pq.QuoteIdentifier(c.tableName+"_pop") + ` ON ` + pq.QuoteIdentifier(c.tableName) + ` (queue, state);
+		CREATE INDEX ` + pq.QuoteIdentifier(c.tableName+"_vacuum") + ` ON ` + pq.QuoteIdentifier(c.tableName) + ` (queue, state, deliveries, leased_until);
+		`)
 		if err != nil {
 			return fmt.Errorf("cannot create queue table: %w", err)
 		}
