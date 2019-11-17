@@ -262,3 +262,23 @@ func TestClosedQueue(t *testing.T) {
 		t.Error("close on closed queue must error with ErrAlreadyClosed:", err)
 	}
 }
+
+func TestValidationErrors(t *testing.T) {
+	client, err := Open(dsn)
+	if err != nil {
+		t.Fatal("cannot open database connection:", err)
+	}
+	defer client.Close()
+	q := client.Queue("closed-client-queue", DisableAutoVacuum())
+	defer q.Close()
+	if err := q.Push(bytes.Repeat([]byte("A"), MaxMessageLength+1)); err != ErrMessageTooLarge {
+		t.Error("expected ErrMessageTooLarge:", err)
+	}
+	if _, err := q.Reserve(0); err != ErrInvalidDuration {
+		t.Error("expected ErrInvalidDuration:", err)
+	}
+	var m Message
+	if err := m.Touch(0); err != ErrInvalidDuration {
+		t.Error("expected ErrInvalidDuration:", err)
+	}
+}
