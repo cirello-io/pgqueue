@@ -93,13 +93,17 @@ func Open(dsn string, opts ...ClientOption) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cannot open database connection: %w", err)
 	}
+	listener := pq.NewListener(dsn, 1*time.Second, 1*time.Second, func(pq.ListenerEventType, error) {})
 	c := &Client{
 		tableName: defaultTableName,
 		db:        db,
-		listener:  pq.NewListener(dsn, 1*time.Second, 1*time.Second, func(pq.ListenerEventType, error) {}),
+		listener:  listener,
 	}
 	for _, opt := range opts {
 		opt(c)
+	}
+	if err := listener.Listen(c.tableName); err != nil {
+		return nil, fmt.Errorf("cannot subscribe for notifications: %w", err)
 	}
 	return c, nil
 }
@@ -242,7 +246,6 @@ func (q *Queue) Watch(lease time.Duration) *Watcher {
 		queue: q,
 		lease: lease,
 	}
-	watcher.err = q.client.listener.Listen(q.queue)
 	return watcher
 }
 
@@ -369,7 +372,7 @@ func (q *Queue) Push(content []byte) error {
 		if _, err := tx.Exec(`INSERT INTO `+pq.QuoteIdentifier(q.client.tableName)+` (queue, state, content) VALUES ($1, $2, $3)`, q.queue, New, content); err != nil {
 			return fmt.Errorf("cannot store message: %w", err)
 		}
-		if _, err := q.client.db.Exec(`NOTIFY ` + pq.QuoteIdentifier(q.queue)); err != nil {
+		if _, err := q.client.db.Exec(`NOTIFY ` + pq.QuoteIdentifier(q.client.tableName) + `, ` + pq.QuoteLiteral(q.queue)); err != nil {
 			return fmt.Errorf("cannot send push notification: %w", err)
 		}
 		return nil
@@ -508,11 +511,13 @@ func (w *Watcher) Next() bool {
 	}
 	for {
 		select {
-		case _, ok := <-w.queue.client.listener.Notify:
-			if !ok {
-				return false
+		case n := <-w.queue.client.listener.Notify:
+			if n.Extra != w.queue.queue {
+				continue
 			}
 		case <-time.After(missedNotificationTimer):
+			// Is the server still alive?
+			go w.queue.client.listener.Ping()
 		}
 		switch msg, err := w.queue.Reserve(w.lease); err {
 		case ErrEmptyQueue:
