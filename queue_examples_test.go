@@ -101,7 +101,7 @@ func Example_listen() {
 		msg.Done()
 		queue.Close()
 	}
-	if err := watch.Err(); err != nil {
+	if err := watch.Err(); err != nil && err != pgqueue.ErrAlreadyClosed {
 		log.Fatalln("cannot observe queue:", err)
 	}
 	// Output:

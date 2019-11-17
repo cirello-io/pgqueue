@@ -497,6 +497,7 @@ func (w *Watcher) Next() bool {
 		case ErrEmptyQueue:
 			continue
 		case sql.ErrConnDone, ErrAlreadyClosed:
+			w.err = err
 			return false
 		default:
 			w.msg = msg
