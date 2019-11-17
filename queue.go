@@ -45,12 +45,12 @@ var ErrInvalidDuration = errors.New("invalid duration")
 // mapped.
 const MaxMessageLength = 65536
 
-// DefaultMaxRetries is how many tries each message gets before getting skipped
-// on Pop and Reserve calls.
-const DefaultMaxRetries = 5
+// DefaultMaxDeliveriesCount is how many delivery attempt each message gets
+// before getting skipped on Pop and Reserve calls.
+const DefaultMaxDeliveriesCount = 5
 
-// DefaultDeadLetterQueueName indicates the name of the dead letter queue.
-const DefaultDeadLetterQueueName = "deadletter"
+// DefaultDeadLetterQueueNamePrefix indicates the name of the dead letter queue.
+const DefaultDeadLetterQueueNamePrefix = "deadletter"
 
 // reasonable defaults
 const (
@@ -117,11 +117,11 @@ func (c *Client) Close() error {
 func (c *Client) Queue(queue string, opts ...QueueOption) *Queue {
 	timer := time.NewTimer(defaultVacuumFrequency)
 	q := &Queue{
-		client:      c,
-		queue:       queue,
-		vacuumTimer: timer,
-		maxRetries:  DefaultMaxRetries,
-		closed:      make(chan struct{}),
+		client:        c,
+		queue:         queue,
+		vacuumTimer:   timer,
+		maxDeliveries: DefaultMaxDeliveriesCount,
+		closed:        make(chan struct{}),
 	}
 	for _, opt := range opts {
 		opt(q)
@@ -169,7 +169,7 @@ func (c *Client) CreateTable() error {
 			id serial,
 			queue varchar,
 			state varchar,
-			tries int NOT NULL DEFAULT 0,
+			deliveries int NOT NULL DEFAULT 0,
 			leased_until TIMESTAMP WITHOUT TIME ZONE,
 			content bytea
 		);`)
@@ -184,11 +184,11 @@ func (c *Client) CreateTable() error {
 type Queue struct {
 	client *Client
 
-	queue       string
-	maxRetries  int
-	vacuumTimer *time.Timer
-	closeOnce   sync.Once
-	closed      chan struct{}
+	queue         string
+	maxDeliveries int
+	vacuumTimer   *time.Timer
+	closeOnce     sync.Once
+	closed        chan struct{}
 
 	muStats     sync.RWMutex
 	vacuumStats VacuumStats
@@ -197,11 +197,11 @@ type Queue struct {
 // QueueOption reconfigure queue at invocation time.
 type QueueOption func(q *Queue)
 
-// WithCustomRetries indicates how many retries each message gets. If zero, the
-// client retries the message forever.
-func WithCustomRetries(retries int) QueueOption {
+// WithMaxDeliveries indicates how many delivery attempts each message gets. If
+// zero, the client retries the message forever.
+func WithMaxDeliveries(maxDeliveries int) QueueOption {
 	return func(q *Queue) {
-		q.maxRetries = retries
+		q.maxDeliveries = maxDeliveries
 	}
 }
 
@@ -246,10 +246,10 @@ type VacuumStats struct {
 	// Done reports how many messages marked as Done were deleted.
 	Done int64
 	// Recovered reports how many expired messages marked as InProgress but
-	// low retry count were recovered.
+	// with low delivery count were recovered.
 	Recovered int64
 	// Dead reports how many expired messages marked as InProgress but with
-	// high retry count were moved to the deadletter queue.
+	// high delivery count were moved to the deadletter queue.
 	Dead int64
 	// Error indicates why the vacuum cycle failed. If nil, it succeeded.
 	Error error
@@ -272,8 +272,8 @@ func (q *Queue) Vacuum() VacuumStats {
 		if err != nil {
 			return fmt.Errorf("cannot calculate how many done messages were deleted: %w", err)
 		}
-		if q.maxRetries > 0 {
-			res, err = tx.Exec(`UPDATE `+pq.QuoteIdentifier(q.client.tableName)+` SET queue = $1 WHERE queue = $2 AND state = $3 AND tries > $4 AND leased_until < NOW()`, DefaultDeadLetterQueueName, q.queue, InProgress, q.maxRetries)
+		if q.maxDeliveries > 0 {
+			res, err = tx.Exec(`UPDATE `+pq.QuoteIdentifier(q.client.tableName)+` SET queue = $1 WHERE queue = $2 AND state = $3 AND deliveries > $4 AND leased_until < NOW()`, DefaultDeadLetterQueueNamePrefix+"-"+q.queue, q.queue, InProgress, q.maxDeliveries)
 			if err != nil {
 				return fmt.Errorf("cannot move messaged to dead letter queue: %w", err)
 			}
@@ -281,7 +281,7 @@ func (q *Queue) Vacuum() VacuumStats {
 			if err != nil {
 				return fmt.Errorf("cannot calculate how many messages were moved to the dead letter queue: %w", err)
 			}
-			res, err = tx.Exec(`UPDATE `+pq.QuoteIdentifier(q.client.tableName)+` SET state = $1 WHERE queue = $2 AND state = $3 AND tries <= $4 AND leased_until < NOW()`, New, q.queue, InProgress, q.maxRetries)
+			res, err = tx.Exec(`UPDATE `+pq.QuoteIdentifier(q.client.tableName)+` SET state = $1 WHERE queue = $2 AND state = $3 AND deliveries <= $4 AND leased_until < NOW()`, New, q.queue, InProgress, q.maxDeliveries)
 			if err != nil {
 				return fmt.Errorf("cannot recover messages: %w", err)
 			}
@@ -323,7 +323,7 @@ func (q *Queue) Reserve(lease time.Duration) (*Message, error) {
 		row = tx.QueryRow(`
 			UPDATE `+pq.QuoteIdentifier(q.client.tableName)+`
 			SET
-				tries = tries + 1,
+				deliveries = deliveries + 1,
 				state = $1,
 				leased_until = now() + $2::interval
 			WHERE
@@ -380,7 +380,7 @@ func (q *Queue) Pop() ([]byte, error) {
 		} else if err == sql.ErrNoRows {
 			return ErrEmptyQueue
 		}
-		if _, err := tx.Exec(`UPDATE `+pq.QuoteIdentifier(q.client.tableName)+` SET tries = tries + 1, state = $1 WHERE id = $2`, Done, id); err != nil {
+		if _, err := tx.Exec(`UPDATE `+pq.QuoteIdentifier(q.client.tableName)+` SET deliveries = deliveries + 1, state = $1 WHERE id = $2`, Done, id); err != nil {
 			return fmt.Errorf("cannot store message: %w", err)
 		}
 		return nil
@@ -480,6 +480,16 @@ type Message struct {
 	Content     []byte
 	LeasedUntil time.Time
 	client      *Client
+}
+
+// Delete the message from the storage.
+func (m *Message) Delete() error {
+	return m.client.retry(func(tx *sql.Tx) error {
+		if _, err := tx.Exec(`DELETE FROM `+pq.QuoteIdentifier(m.client.tableName)+` WHERE id = $2`, m.id); err != nil {
+			return fmt.Errorf("cannot delete message from the storage: %w", err)
+		}
+		return nil
+	})
 }
 
 // Done mark message as done.

@@ -197,7 +197,7 @@ func Example_vacuum() {
 	}
 	queue := client.Queue(
 		"example-queue-vacuum",
-		pgqueue.WithCustomRetries(1),
+		pgqueue.WithMaxDeliveries(1),
 		pgqueue.DisableAutoVacuum(),
 	)
 	defer queue.Close()
