@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 	"sync"
 	"time"
 
@@ -120,14 +119,7 @@ type ClientCloseError struct {
 }
 
 func (e *ClientCloseError) Error() string {
-	var msgs []string
-	if e.ListenerError != nil {
-		msgs = append(msgs, fmt.Sprintf("listener: %v", e.ListenerError))
-	}
-	if e.DriverError != nil {
-		msgs = append(msgs, fmt.Sprintf("driver: %v", e.DriverError))
-	}
-	return strings.Join(msgs, " | ")
+	return fmt.Sprintf("listener: %v | driver: %v", e.ListenerError, e.DriverError)
 }
 
 // Close stops the queue system.
