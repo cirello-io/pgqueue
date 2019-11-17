@@ -11,25 +11,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package pgqueue_test
+package pgqueue
 
 import (
 	"bytes"
-	"flag"
+	"os"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"cirello.io/pgqueue"
 	_ "github.com/lib/pq"
 	"golang.org/x/sync/errgroup"
 )
 
-var dsn = flag.String("dsn", "postgres://postgres@localhost/postgres?sslmode=disable", "connection string to the test database server")
+var dsn = os.Getenv("PGQUEUE_TEST_DSN")
 
 func TestOverload(t *testing.T) {
-	client, err := pgqueue.Open(*dsn)
+	client, err := Open(dsn)
 	if err != nil {
 		t.Fatal("cannot open database connection:", err)
 	}
@@ -37,16 +36,15 @@ func TestOverload(t *testing.T) {
 	if err := client.CreateTable(); err != nil {
 		t.Fatal("cannot create queue table:", err)
 	}
-	queue := client.Queue("queue-overload", pgqueue.DisableAutoVacuum())
+	queue := client.Queue("queue-overload", DisableAutoVacuum())
 	defer queue.Close()
-	t.Parallel()
 	t.Log("vacuuming the queue")
 	if stats := queue.Vacuum(); stats.Error != nil {
 		t.Fatal("cannot clean up queue before overload test:", stats.Error)
 	}
 	t.Log("zeroing the queue")
 	for {
-		if _, err := queue.Pop(); err == pgqueue.ErrEmptyQueue {
+		if _, err := queue.Pop(); err == ErrEmptyQueue {
 			break
 		} else if err != nil {
 			t.Fatal("cannot zero queue before overload test:", err)
@@ -71,7 +69,7 @@ func TestOverload(t *testing.T) {
 		g.Go(func() error {
 			for {
 				_, err := queue.Pop()
-				if err == pgqueue.ErrEmptyQueue {
+				if err == ErrEmptyQueue {
 					return nil
 				} else if err != nil {
 					t.Log(err)
@@ -92,7 +90,7 @@ func TestOverload(t *testing.T) {
 }
 
 func TestCustomAutoVacuum(t *testing.T) {
-	client, err := pgqueue.Open(*dsn)
+	client, err := Open(dsn)
 	if err != nil {
 		t.Fatal("cannot open database connection:", err)
 	}
@@ -102,9 +100,8 @@ func TestCustomAutoVacuum(t *testing.T) {
 	}
 	const freq = 100 * time.Millisecond
 	timer := time.NewTimer(freq)
-	queue := client.Queue("queue-custom-autovacuum", pgqueue.WithCustomAutoVacuum(timer))
+	queue := client.Queue("queue-custom-autovacuum", WithCustomAutoVacuum(timer))
 	defer queue.Close()
-	t.Parallel()
 	if err := queue.Push([]byte("content")); err != nil {
 		t.Fatal("cannot push content:", err)
 	}
@@ -126,7 +123,7 @@ func TestCustomAutoVacuum(t *testing.T) {
 
 func TestDeadletterDump(t *testing.T) {
 	const reservationTime = 500 * time.Millisecond
-	client, err := pgqueue.Open(*dsn)
+	client, err := Open(dsn)
 	if err != nil {
 		t.Fatal("cannot open database connection:", err)
 	}
@@ -136,8 +133,8 @@ func TestDeadletterDump(t *testing.T) {
 	}
 	queue := client.Queue(
 		"example-deadletter-queue",
-		pgqueue.WithMaxDeliveries(1),
-		pgqueue.DisableAutoVacuum(),
+		WithMaxDeliveries(1),
+		DisableAutoVacuum(),
 	)
 	defer queue.Close()
 	content := []byte("the message")

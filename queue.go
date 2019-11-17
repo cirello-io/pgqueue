@@ -519,6 +519,11 @@ type Message struct {
 	client      *Client
 }
 
+// ID is the message internal ID.
+func (m *Message) ID() uint64 {
+	return m.id
+}
+
 // Delete the message from the storage.
 func (m *Message) Delete() error {
 	return m.client.retry(func(tx *sql.Tx) error {

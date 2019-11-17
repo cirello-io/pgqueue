@@ -17,14 +17,17 @@ import (
 	"bytes"
 	"fmt"
 	"log"
+	"os"
 	"time"
 
 	"cirello.io/pgqueue"
 	_ "github.com/lib/pq"
 )
 
+var dsn = os.Getenv("PGQUEUE_TEST_DSN")
+
 func Example_basic() {
-	client, err := pgqueue.Open(*dsn)
+	client, err := pgqueue.Open(dsn)
 	if err != nil {
 		log.Fatalln("cannot open database connection:", err)
 	}
@@ -48,7 +51,7 @@ func Example_basic() {
 }
 
 func Example_emptyQueue() {
-	client, err := pgqueue.Open(*dsn)
+	client, err := pgqueue.Open(dsn)
 	if err != nil {
 		log.Fatalln("cannot open database connection:", err)
 	}
@@ -65,7 +68,7 @@ func Example_emptyQueue() {
 }
 
 func Example_largeMessage() {
-	client, err := pgqueue.Open(*dsn)
+	client, err := pgqueue.Open(dsn)
 	if err != nil {
 		log.Fatalln("cannot open database connection:", err)
 	}
@@ -83,7 +86,7 @@ func Example_largeMessage() {
 }
 
 func Example_listen() {
-	client, err := pgqueue.Open(*dsn)
+	client, err := pgqueue.Open(dsn)
 	if err != nil {
 		log.Fatalln("cannot open database connection:", err)
 	}
@@ -106,7 +109,7 @@ func Example_listen() {
 }
 
 func Example_reservation() {
-	client, err := pgqueue.Open(*dsn)
+	client, err := pgqueue.Open(dsn)
 	if err != nil {
 		log.Fatalln("cannot open database connection:", err)
 	}
@@ -133,7 +136,7 @@ func Example_reservation() {
 }
 
 func Example_reservedReleased() {
-	client, err := pgqueue.Open(*dsn)
+	client, err := pgqueue.Open(dsn)
 	if err != nil {
 		log.Fatalln("cannot open database connection:", err)
 	}
@@ -160,7 +163,7 @@ func Example_reservedReleased() {
 }
 
 func Example_reservedTouch() {
-	client, err := pgqueue.Open(*dsn)
+	client, err := pgqueue.Open(dsn)
 	if err != nil {
 		log.Fatalln("cannot open database connection:", err)
 	}
@@ -189,7 +192,7 @@ func Example_reservedTouch() {
 
 func Example_vacuum() {
 	const reservationTime = 500 * time.Millisecond
-	client, err := pgqueue.Open(*dsn)
+	client, err := pgqueue.Open(dsn)
 	if err != nil {
 		log.Fatalln("cannot open database connection:", err)
 	}
