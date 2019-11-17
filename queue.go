@@ -92,7 +92,7 @@ func WithCustomTable(tableName string) ClientOption {
 func Open(dsn string, opts ...ClientOption) (*Client, error) {
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
-		return nil, fmt.Errorf("cannot open database connection: %w", err)
+		return nil, fmt.Errorf("cannot create database connection: %w", err)
 	}
 	if err := db.Ping(); err != nil {
 		return nil, fmt.Errorf("cannot open database: %w", err)

@@ -190,12 +190,20 @@ func TestReconfiguredClient(t *testing.T) {
 			t.Errorf("unexpected output: %s", poppedContent)
 		}
 	})
-	t.Run("bad DSN", func(t *testing.T) {
-		client, err := Open("bad-dsn")
+	t.Run("valid DSN to bad target", func(t *testing.T) {
+		client, err := Open("bad-target")
 		if err == nil {
 			client.Close()
 			t.Fatal("expected error not found")
 		}
+	})
+	t.Run("bad DSN", func(t *testing.T) {
+		client, err := Open("postgresql://bad-target?client_encoding=absurd")
+		if err == nil {
+			client.Close()
+			t.Fatal("expected error not found")
+		}
+		t.Log("error:", err)
 	})
 	t.Run("bad listener", func(t *testing.T) {
 		client, err := Open(dsn, func(c *Client) {
