@@ -93,6 +93,9 @@ func Open(dsn string, opts ...ClientOption) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cannot open database connection: %w", err)
 	}
+	if err := db.Ping(); err != nil {
+		return nil, fmt.Errorf("cannot open database: %w", err)
+	}
 	listener := pq.NewListener(dsn, 1*time.Second, 1*time.Second, func(pq.ListenerEventType, error) {})
 	c := &Client{
 		tableName: defaultTableName,

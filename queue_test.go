@@ -167,25 +167,33 @@ func TestDeadletterDump(t *testing.T) {
 }
 
 func TestReconfiguredClient(t *testing.T) {
-	client, err := Open(dsn, WithCustomTable("queue2"))
-	if err != nil {
-		t.Fatal("cannot open database connection:", err)
-	}
-	defer client.Close()
-	if err := client.CreateTable(); err != nil {
-		t.Fatal("cannot create queue table:", err)
-	}
-	queue := client.Queue("queue-reconfigured-client")
-	defer queue.Close()
-	content := []byte("content")
-	if err := queue.Push(content); err != nil {
-		t.Fatal("cannot push message to queue:", err)
-	}
-	poppedContent, err := queue.Pop()
-	if err != nil {
-		t.Fatal("cannot pop message from the queue:", err)
-	}
-	if !bytes.Equal(poppedContent, content) {
-		t.Errorf("unexpected output: %s", poppedContent)
-	}
+	t.Run("custom table", func(t *testing.T) {
+		client, err := Open(dsn, WithCustomTable("queue2"))
+		if err != nil {
+			t.Fatal("cannot open database connection:", err)
+		}
+		defer client.Close()
+		if err := client.CreateTable(); err != nil {
+			t.Fatal("cannot create queue table:", err)
+		}
+		queue := client.Queue("queue-reconfigured-client")
+		defer queue.Close()
+		content := []byte("content")
+		if err := queue.Push(content); err != nil {
+			t.Fatal("cannot push message to queue:", err)
+		}
+		poppedContent, err := queue.Pop()
+		if err != nil {
+			t.Fatal("cannot pop message from the queue:", err)
+		}
+		if !bytes.Equal(poppedContent, content) {
+			t.Errorf("unexpected output: %s", poppedContent)
+		}
+	})
+	t.Run("bad DSN", func(t *testing.T) {
+		_, err := Open("bad-dsn")
+		if err == nil {
+			t.Fatal("expected error not found")
+		}
+	})
 }
