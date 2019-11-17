@@ -535,8 +535,10 @@ func (w *Watcher) Next() bool {
 	}
 	for {
 		select {
-		case n, ok := <-w.queue.client.listener.Notify:
-			if ok && n.Extra != w.queue.queue {
+		case n := <-w.queue.client.listener.Notify:
+			isReconnection := n == nil
+			isOtherQueue := n.Extra != w.queue.queue
+			if isReconnection || isOtherQueue {
 				continue
 			}
 		case <-time.After(missedNotificationTimer):
