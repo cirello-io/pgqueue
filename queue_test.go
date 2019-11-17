@@ -344,16 +344,17 @@ func TestCrossQueueBump(t *testing.T) {
 	defer qAlpha.Close()
 	qBravo := client.Queue("cross-queue-bump-bravo", DisableAutoVacuum())
 	defer qBravo.Close()
-	qBravo.Push([]byte("message-bravo"))
 	watchAlpha := qAlpha.Watch(time.Minute)
-	alphaGotMessage := make(chan struct{})
+	alphaGotMessage := make(chan bool)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		watchAlpha.Next()
-		close(alphaGotMessage)
+		alphaGotMessage <- watchAlpha.Next()
 		t.Log("watchAlpha got a message")
 	}()
+	if err := qBravo.Push([]byte("message-bravo")); err != nil {
+		t.Fatal("cannot push message to qBravo:", err)
+	}
 	select {
 	case <-alphaGotMessage:
 		msg := watchAlpha.Message().Content
@@ -362,10 +363,13 @@ func TestCrossQueueBump(t *testing.T) {
 	case <-time.After(missedNotificationTimer):
 		t.Log("watchAlpa.Next() was not affected by a message dispatched to qBravo")
 	}
-	qAlpha.Push([]byte("message-alpha"))
+	if err := qAlpha.Push([]byte("message-alpha")); err != nil {
+		t.Fatal("cannot push message to qAlpha:", err)
+	}
 	select {
-	case <-alphaGotMessage:
+	case next := <-alphaGotMessage:
 		msg := watchAlpha.Message().Content
+		t.Logf("next: %v", next)
 		t.Logf("msg: %s", msg)
 		if !bytes.Equal([]byte("message-alpha"), msg) {
 			t.Error("unexpected message found")
