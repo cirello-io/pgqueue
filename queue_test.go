@@ -191,9 +191,21 @@ func TestReconfiguredClient(t *testing.T) {
 		}
 	})
 	t.Run("bad DSN", func(t *testing.T) {
-		_, err := Open("bad-dsn")
+		client, err := Open("bad-dsn")
 		if err == nil {
+			client.Close()
 			t.Fatal("expected error not found")
 		}
+	})
+	t.Run("bad listener", func(t *testing.T) {
+		client, err := Open(dsn, func(c *Client) {
+			// sabotage the client during setup
+			c.Close()
+		})
+		if err == nil {
+			client.Close()
+			t.Fatal("expected error missing")
+		}
+		t.Log("error:", err)
 	})
 }
