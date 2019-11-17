@@ -520,11 +520,12 @@ type Watcher struct {
 	err   error
 }
 
+const missedNotificationTimer = 5 * time.Second
+
 // Next waits for the next message to arrive and store it into Watcher.
 func (w *Watcher) Next() bool {
 	// how frequently the next call is going to ping the database if nothing
 	// comes from the notification channel.
-	const missedNotificationTimer = 5 * time.Second
 	if w.err != nil {
 		return false
 	}

@@ -331,3 +331,36 @@ func TestWatchNextErrors(t *testing.T) {
 		}
 	})
 }
+
+func TestCrossQueueBump(t *testing.T) {
+	client, err := Open(dsn)
+	if err != nil {
+		t.Fatal("cannot open database connection:", err)
+	}
+	defer client.Close()
+	qAlpha := client.Queue("cross-queue-bump-alpha", DisableAutoVacuum())
+	qBravo := client.Queue("cross-queue-bump-bravo", DisableAutoVacuum())
+	watchAlpha := qAlpha.Watch(time.Minute)
+	alphaGotMessage := make(chan struct{})
+	go func() {
+		watchAlpha.Next()
+		close(alphaGotMessage)
+	}()
+	qBravo.Push([]byte("message-bravo"))
+	select {
+	case <-alphaGotMessage:
+		t.Fatal("wrong bump")
+	default:
+	}
+	qAlpha.Push([]byte("message-alpha"))
+	select {
+	case <-alphaGotMessage:
+		msg := watchAlpha.Message().Content
+		t.Logf("msg: %s", msg)
+		if !bytes.Equal([]byte("message-alpha"), msg) {
+			t.Error("unexpected message found")
+		}
+	case <-time.After(missedNotificationTimer):
+		t.Fatal("missed bump")
+	}
+}
