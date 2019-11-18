@@ -30,6 +30,7 @@ var dsn = os.Getenv("PGQUEUE_TEST_DSN")
 
 func TestOverload(t *testing.T) {
 	t.Run("popPush", func(t *testing.T) {
+		t.Parallel()
 		client, err := Open(dsn)
 		if err != nil {
 			t.Fatal("cannot open database connection:", err)
@@ -91,6 +92,7 @@ func TestOverload(t *testing.T) {
 		}
 	})
 	t.Run("popReserveDone", func(t *testing.T) {
+		t.Parallel()
 		client, err := Open(dsn)
 		if err != nil {
 			t.Fatal("cannot open database connection:", err)
