@@ -29,65 +29,129 @@ import (
 var dsn = os.Getenv("PGQUEUE_TEST_DSN")
 
 func TestOverload(t *testing.T) {
-	client, err := Open(dsn)
-	if err != nil {
-		t.Fatal("cannot open database connection:", err)
-	}
-	defer client.Close()
-	if err := client.CreateTable(); err != nil {
-		t.Fatal("cannot create queue table:", err)
-	}
-	queue := client.Queue("queue-overload", DisableAutoVacuum())
-	defer queue.Close()
-	t.Log("vacuuming the queue")
-	if stats := queue.Vacuum(); stats.Err != nil {
-		t.Fatal("cannot clean up queue before overload test:", stats.Err)
-	}
-	t.Log("zeroing the queue")
-	for {
-		if _, err := queue.Pop(); err == ErrEmptyQueue {
-			break
-		} else if err != nil {
-			t.Fatal("cannot zero queue before overload test:", err)
+	t.Run("popPush", func(t *testing.T) {
+		client, err := Open(dsn)
+		if err != nil {
+			t.Fatal("cannot open database connection:", err)
 		}
-	}
-
-	t.Log("pushing messages")
-	for i := 0; i < 1_000; i++ {
-		content := []byte("content")
-		if err := queue.Push(content); err != nil {
-			t.Fatal("cannot push message to queue:", err)
+		defer client.Close()
+		if err := client.CreateTable(); err != nil {
+			t.Fatal("cannot create queue table:", err)
 		}
-	}
-	t.Log("popping messages")
-	var (
-		g errgroup.Group
-
-		mu       sync.Mutex
-		totalMsg int
-	)
-	for i := 0; i < 10; i++ {
-		g.Go(func() error {
-			for {
-				_, err := queue.Pop()
-				if err == ErrEmptyQueue {
-					return nil
-				} else if err != nil {
-					t.Log(err)
-					return err
-				}
-				mu.Lock()
-				totalMsg++
-				mu.Unlock()
+		queue := client.Queue("queue-overload-pop-push", DisableAutoVacuum())
+		defer queue.Close()
+		t.Log("vacuuming the queue")
+		if stats := queue.Vacuum(); stats.Err != nil {
+			t.Fatal("cannot clean up queue before overload test:", stats.Err)
+		}
+		t.Log("zeroing the queue")
+		for {
+			if _, err := queue.Pop(); err == ErrEmptyQueue {
+				break
+			} else if err != nil {
+				t.Fatal("cannot zero queue before overload test:", err)
 			}
-		})
-	}
-	if err := g.Wait(); err != nil {
-		t.Fatal(err)
-	}
-	if totalMsg != 1_000 {
-		t.Fatal("messages lost?", totalMsg)
-	}
+		}
+
+		t.Log("pushing messages")
+		for i := 0; i < 1_000; i++ {
+			content := []byte("content")
+			if err := queue.Push(content); err != nil {
+				t.Fatal("cannot push message to queue:", err)
+			}
+		}
+		t.Log("popping messages")
+		var (
+			g errgroup.Group
+
+			mu       sync.Mutex
+			totalMsg int
+		)
+		for i := 0; i < 10; i++ {
+			g.Go(func() error {
+				for {
+					_, err := queue.Pop()
+					if err == ErrEmptyQueue {
+						return nil
+					} else if err != nil {
+						t.Log(err)
+						return err
+					}
+					mu.Lock()
+					totalMsg++
+					mu.Unlock()
+				}
+			})
+		}
+		if err := g.Wait(); err != nil {
+			t.Fatal(err)
+		}
+		if totalMsg != 1_000 {
+			t.Fatal("messages lost?", totalMsg)
+		}
+	})
+	t.Run("popReserveDone", func(t *testing.T) {
+		client, err := Open(dsn)
+		if err != nil {
+			t.Fatal("cannot open database connection:", err)
+		}
+		defer client.Close()
+		if err := client.CreateTable(); err != nil {
+			t.Fatal("cannot create queue table:", err)
+		}
+		queue := client.Queue("queue-overload-pop-reserve-done", DisableAutoVacuum())
+		defer queue.Close()
+		t.Log("vacuuming the queue")
+		if stats := queue.Vacuum(); stats.Err != nil {
+			t.Fatal("cannot clean up queue before overload test:", stats.Err)
+		}
+		t.Log("zeroing the queue")
+		for {
+			if _, err := queue.Pop(); err == ErrEmptyQueue {
+				break
+			} else if err != nil {
+				t.Fatal("cannot zero queue before overload test:", err)
+			}
+		}
+
+		t.Log("pushing messages")
+		for i := 0; i < 1_000; i++ {
+			content := []byte("content")
+			if err := queue.Push(content); err != nil {
+				t.Fatal("cannot push message to queue:", err)
+			}
+		}
+		t.Log("reserving messages")
+		var (
+			g errgroup.Group
+
+			mu       sync.Mutex
+			totalMsg int
+		)
+		for i := 0; i < 10; i++ {
+			g.Go(func() error {
+				for {
+					m, err := queue.Reserve(5 * time.Minute)
+					if err == ErrEmptyQueue {
+						return nil
+					} else if err != nil {
+						t.Log(err)
+						return err
+					}
+					m.Done()
+					mu.Lock()
+					totalMsg++
+					mu.Unlock()
+				}
+			})
+		}
+		if err := g.Wait(); err != nil {
+			t.Fatal(err)
+		}
+		if totalMsg != 1_000 {
+			t.Fatal("messages lost?", totalMsg)
+		}
+	})
 }
 
 func TestCustomAutoVacuum(t *testing.T) {
