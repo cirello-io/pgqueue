@@ -30,7 +30,7 @@ func BenchmarkThroughput(b *testing.B) {
 		b.Fatal("cannot create queue table:", err)
 	}
 	b.Run("push", func(b *testing.B) {
-		queue := client.Queue("queue-benchmark-push", DisableAutoVacuum())
+		queue := client.Queue("queue-benchmark-push")
 		defer queue.Close()
 		for i := 0; i < b.N; i++ {
 			if err := queue.Push(msg); err != nil {
@@ -40,7 +40,7 @@ func BenchmarkThroughput(b *testing.B) {
 		}
 	})
 	b.Run("pop", func(b *testing.B) {
-		queue := client.Queue("queue-benchmark-pop", DisableAutoVacuum())
+		queue := client.Queue("queue-benchmark-pop")
 		defer queue.Close()
 		for i := 0; i < b.N; i++ {
 			if err := queue.Push(msg); err != nil {
@@ -56,7 +56,7 @@ func BenchmarkThroughput(b *testing.B) {
 		}
 	})
 	b.Run("pushPop", func(b *testing.B) {
-		queue := client.Queue("queue-benchmark-pushPop", DisableAutoVacuum())
+		queue := client.Queue("queue-benchmark-pushPop")
 		defer queue.Close()
 		for i := 0; i < b.N; i++ {
 			if err := queue.Push(msg); err != nil {
@@ -72,7 +72,7 @@ func BenchmarkThroughput(b *testing.B) {
 		}
 	})
 	b.Run("pushReserveDone", func(b *testing.B) {
-		queue := client.Queue("queue-benchmark-pushReserveDone", DisableAutoVacuum())
+		queue := client.Queue("queue-benchmark-pushReserveDone")
 		defer queue.Close()
 		for i := 0; i < b.N; i++ {
 			if err := queue.Push(msg); err != nil {
