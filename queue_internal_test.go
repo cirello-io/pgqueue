@@ -14,8 +14,12 @@
 package pgqueue
 
 import (
+	"bytes"
+	"errors"
 	"testing"
 	"time"
+
+	"github.com/DATA-DOG/go-sqlmock"
 )
 
 func Test_validDuration(t *testing.T) {
@@ -37,4 +41,47 @@ func Test_validDuration(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDBErrorHandling(t *testing.T) {
+	setup := func() (*Client, sqlmock.Sqlmock) {
+		client, err := Open(dsn)
+		if err != nil {
+			t.Fatal("cannot open database connection:", err)
+		}
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatal("cannot create mock:", err)
+		}
+		client.db = db
+		return client, mock
+	}
+	t.Run("dump dead letter queue", func(t *testing.T) {
+		t.Run("bad select", func(t *testing.T) {
+			client, mock := setup()
+			badQuery := errors.New("cannot run SELECT")
+			mock.ExpectQuery("SELECT id, content FROM").WillReturnError(badQuery)
+			if err := client.DumpDeadLetterQueue("some bad queue", nil); !errors.Is(err, badQuery) {
+				t.Errorf("expected SELECT error missing: %v", err)
+			}
+		})
+		t.Run("bad row", func(t *testing.T) {
+			client, mock := setup()
+			mock.ExpectQuery("SELECT id, content FROM").WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(0))
+			var buf bytes.Buffer
+			if err := client.DumpDeadLetterQueue("some bad queue", &buf); err == nil {
+				t.Errorf("expected Scan error missing: %v", err)
+			}
+		})
+		t.Run("bad delete", func(t *testing.T) {
+			client, mock := setup()
+			mock.ExpectQuery("SELECT id, content FROM").WillReturnRows(sqlmock.NewRows([]string{"id", "content"}).AddRow(1, "dead message"))
+			badDelete := errors.New("cannot execute DELETE")
+			mock.ExpectExec("DELETE").WillReturnError(badDelete)
+			var buf bytes.Buffer
+			if err := client.DumpDeadLetterQueue("some bad queue", &buf); !errors.Is(err, badDelete) {
+				t.Errorf("expected Exec error missing: %v", err)
+			}
+		})
+	})
 }
