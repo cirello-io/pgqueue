@@ -15,6 +15,7 @@ package pgqueue
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"strings"
 	"sync"
@@ -121,6 +122,12 @@ func TestCustomAutoVacuum(t *testing.T) {
 	}
 }
 
+type badWriter struct{}
+
+func (w *badWriter) Write([]byte) (int, error) {
+	return 0, errors.New("wrote nothing")
+}
+
 func TestDeadletterDump(t *testing.T) {
 	const reservationTime = 500 * time.Millisecond
 	client, err := Open(dsn)
@@ -131,39 +138,72 @@ func TestDeadletterDump(t *testing.T) {
 	if err := client.CreateTable(); err != nil {
 		t.Fatal("cannot create queue table:", err)
 	}
-	queue := client.Queue(
-		"example-deadletter-queue",
-		WithMaxDeliveries(1),
-		DisableAutoVacuum(),
-	)
-	defer queue.Close()
-	content := []byte("the message")
-	if err := queue.Push(content); err != nil {
-		t.Fatal("cannot push message to queue:", err)
-	}
-	if _, err := queue.Reserve(reservationTime); err != nil {
-		t.Fatal("cannot reserve message from the queue (try):", err)
-	}
-	time.Sleep(2 * reservationTime)
-	if stats := queue.Vacuum(); stats.Err != nil {
-		t.Fatal("cannot clean up queue:", err)
-	}
-	if _, err := queue.Reserve(reservationTime); err != nil {
-		t.Fatal("cannot reserve message from the queue (retry):", err)
-	}
-	time.Sleep(2 * reservationTime)
-	if stats := queue.Vacuum(); stats.Err != nil {
-		t.Fatal("cannot clean up queue:", err)
-	}
+	t.Run("good dump", func(t *testing.T) {
+		queue := client.Queue(
+			"example-deadletter-queue",
+			WithMaxDeliveries(1),
+			DisableAutoVacuum(),
+		)
+		defer queue.Close()
+		content := []byte("the message")
+		if err := queue.Push(content); err != nil {
+			t.Fatal("cannot push message to queue:", err)
+		}
+		if _, err := queue.Reserve(reservationTime); err != nil {
+			t.Fatal("cannot reserve message from the queue (try):", err)
+		}
+		time.Sleep(2 * reservationTime)
+		if stats := queue.Vacuum(); stats.Err != nil {
+			t.Fatal("cannot clean up queue:", err)
+		}
+		if _, err := queue.Reserve(reservationTime); err != nil {
+			t.Fatal("cannot reserve message from the queue (retry):", err)
+		}
+		time.Sleep(2 * reservationTime)
+		if stats := queue.Vacuum(); stats.Err != nil {
+			t.Fatal("cannot clean up queue:", err)
+		}
 
-	var buf bytes.Buffer
-	if err := client.DumpDeadLetterQueue("example-deadletter-queue", &buf); err != nil {
-		t.Fatal("cannot dump dead letter queue")
-	}
-	t.Log(buf.String())
-	if !strings.Contains(buf.String(), "dGhlIG1lc3NhZ2U=") {
-		t.Fatal("bad dump found")
-	}
+		var buf bytes.Buffer
+		if err := client.DumpDeadLetterQueue("example-deadletter-queue", &buf); err != nil {
+			t.Fatal("cannot dump dead letter queue")
+		}
+		t.Log(buf.String())
+		if !strings.Contains(buf.String(), "dGhlIG1lc3NhZ2U=") {
+			t.Fatal("bad dump found")
+		}
+	})
+	t.Run("bad io.Writer", func(t *testing.T) {
+		queue := client.Queue(
+			"example-deadletter-queue-bad-writer",
+			WithMaxDeliveries(1),
+			DisableAutoVacuum(),
+		)
+		defer queue.Close()
+		content := []byte("the message")
+		if err := queue.Push(content); err != nil {
+			t.Fatal("cannot push message to queue:", err)
+		}
+		if _, err := queue.Reserve(reservationTime); err != nil {
+			t.Fatal("cannot reserve message from the queue (try):", err)
+		}
+		time.Sleep(2 * reservationTime)
+		if stats := queue.Vacuum(); stats.Err != nil {
+			t.Fatal("cannot clean up queue:", err)
+		}
+		if _, err := queue.Reserve(reservationTime); err != nil {
+			t.Fatal("cannot reserve message from the queue (retry):", err)
+		}
+		time.Sleep(2 * reservationTime)
+		if stats := queue.Vacuum(); stats.Err != nil {
+			t.Fatal("cannot clean up queue:", err)
+		}
+		err := client.DumpDeadLetterQueue("example-deadletter-queue-bad-writer", &badWriter{})
+		if err == nil {
+			t.Fatal("expected error not found")
+		}
+		t.Log(err)
+	})
 }
 
 func TestReconfiguredClient(t *testing.T) {
