@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/lib/pq"
+	"golang.org/x/sync/singleflight"
 )
 
 // ErrEmptyQueue indicates there isn't any message available at the head of the
@@ -180,7 +181,7 @@ func (c *Client) Queue(queue string, opts ...QueueOption) *Queue {
 		opt(q)
 	}
 	if q.vacuumTicker != nil {
-		go q.runVacuum()
+		go q.runAutoVacuum()
 	}
 	return q
 }
@@ -275,12 +276,14 @@ type Queue struct {
 
 	queue         string
 	maxDeliveries int
-	vacuumTicker  *time.Ticker
 	closeOnce     sync.Once
 	closed        chan struct{}
 
 	muStats     sync.RWMutex
 	vacuumStats VacuumStats
+
+	vacuumSingleflight singleflight.Group
+	vacuumTicker       *time.Ticker
 }
 
 // QueueOption reconfigure queue at invocation time.
@@ -338,41 +341,44 @@ type VacuumStats struct {
 
 // Vacuum cleans up the queue from done or dead messages.
 func (q *Queue) Vacuum() VacuumStats {
-	var stats VacuumStats
-	if q.isClosed() {
-		stats.Err = ErrAlreadyClosed
-		return stats
-	}
-	err := q.client.retry(func(tx *sql.Tx) (err error) {
-		stats = VacuumStats{}
-		res, err := tx.Exec(`DELETE FROM `+pq.QuoteIdentifier(q.client.tableName)+` WHERE queue = $1 AND state = $2`, q.queue, Done)
-		if err != nil {
-			return fmt.Errorf("cannot store message: %w", err)
+	v, err, _ := q.vacuumSingleflight.Do("vacuum", func() (interface{}, error) {
+		var stats VacuumStats
+		if q.isClosed() {
+			return stats, ErrAlreadyClosed
 		}
-		stats.Done, err = res.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("cannot calculate how many done messages were deleted: %w", err)
-		}
-		if q.maxDeliveries > 0 {
-			res, err = tx.Exec(`UPDATE `+pq.QuoteIdentifier(q.client.tableName)+` SET queue = $1 WHERE queue = $2 AND state = $3 AND deliveries > $4 AND leased_until < NOW()`, DefaultDeadLetterQueueNamePrefix+"-"+q.queue, q.queue, InProgress, q.maxDeliveries)
+		err := q.client.retry(func(tx *sql.Tx) (err error) {
+			stats = VacuumStats{}
+			res, err := tx.Exec(`DELETE FROM `+pq.QuoteIdentifier(q.client.tableName)+` WHERE queue = $1 AND state = $2`, q.queue, Done)
 			if err != nil {
-				return fmt.Errorf("cannot move messaged to dead letter queue: %w", err)
+				return fmt.Errorf("cannot store message: %w", err)
 			}
-			stats.Dead, err = res.RowsAffected()
+			stats.Done, err = res.RowsAffected()
 			if err != nil {
-				return fmt.Errorf("cannot calculate how many messages were moved to the dead letter queue: %w", err)
+				return fmt.Errorf("cannot calculate how many done messages were deleted: %w", err)
 			}
-			res, err = tx.Exec(`UPDATE `+pq.QuoteIdentifier(q.client.tableName)+` SET state = $1 WHERE queue = $2 AND state = $3 AND deliveries <= $4 AND leased_until < NOW()`, New, q.queue, InProgress, q.maxDeliveries)
-			if err != nil {
-				return fmt.Errorf("cannot recover messages: %w", err)
+			if q.maxDeliveries > 0 {
+				res, err = tx.Exec(`UPDATE `+pq.QuoteIdentifier(q.client.tableName)+` SET queue = $1 WHERE queue = $2 AND state = $3 AND deliveries > $4 AND leased_until < NOW()`, DefaultDeadLetterQueueNamePrefix+"-"+q.queue, q.queue, InProgress, q.maxDeliveries)
+				if err != nil {
+					return fmt.Errorf("cannot move messaged to dead letter queue: %w", err)
+				}
+				stats.Dead, err = res.RowsAffected()
+				if err != nil {
+					return fmt.Errorf("cannot calculate how many messages were moved to the dead letter queue: %w", err)
+				}
+				res, err = tx.Exec(`UPDATE `+pq.QuoteIdentifier(q.client.tableName)+` SET state = $1 WHERE queue = $2 AND state = $3 AND deliveries <= $4 AND leased_until < NOW()`, New, q.queue, InProgress, q.maxDeliveries)
+				if err != nil {
+					return fmt.Errorf("cannot recover messages: %w", err)
+				}
+				stats.Recovered, err = res.RowsAffected()
+				if err != nil {
+					return fmt.Errorf("cannot calculate how many messages were recovered: %w", err)
+				}
 			}
-			stats.Recovered, err = res.RowsAffected()
-			if err != nil {
-				return fmt.Errorf("cannot calculate how many messages were recovered: %w", err)
-			}
-		}
-		return nil
+			return nil
+		})
+		return stats, err
 	})
+	stats := v.(VacuumStats)
 	stats.Err = err
 	return stats
 }
@@ -516,7 +522,7 @@ func (q *Queue) isClosed() bool {
 	}
 }
 
-func (q *Queue) runVacuum() {
+func (q *Queue) runAutoVacuum() {
 	for {
 
 		select {
