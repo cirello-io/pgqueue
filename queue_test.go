@@ -29,16 +29,16 @@ import (
 var dsn = os.Getenv("PGQUEUE_TEST_DSN")
 
 func TestOverload(t *testing.T) {
-	client, err := Open(dsn)
-	if err != nil {
-		t.Fatal("cannot open database connection:", err)
-	}
-	defer client.Close()
-	if err := client.CreateTable(); err != nil {
-		t.Fatal("cannot create queue table:", err)
-	}
 	t.Run("popPush", func(t *testing.T) {
 		t.Parallel()
+		client, err := Open(dsn, WithCustomTable("overloadpoppush"))
+		if err != nil {
+			t.Fatal("cannot open database connection:", err)
+		}
+		defer client.Close()
+		if err := client.CreateTable(); err != nil {
+			t.Fatal("cannot create queue table:", err)
+		}
 		queue := client.Queue("queue-overload-pop-push")
 		defer queue.Close()
 		t.Log("vacuuming the queue")
@@ -93,6 +93,14 @@ func TestOverload(t *testing.T) {
 	})
 	t.Run("popReserveDone", func(t *testing.T) {
 		t.Parallel()
+		client, err := Open(dsn, WithCustomTable("overloadpopreservedone"))
+		if err != nil {
+			t.Fatal("cannot open database connection:", err)
+		}
+		defer client.Close()
+		if err := client.CreateTable(); err != nil {
+			t.Fatal("cannot create queue table:", err)
+		}
 		queue := client.Queue("queue-overload-pop-reserve-done")
 		defer queue.Close()
 		t.Log("vacuuming the queue")
