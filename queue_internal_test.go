@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/lib/pq"
 )
 
 func Test_validDuration(t *testing.T) {
@@ -81,6 +82,69 @@ func TestDBErrorHandling(t *testing.T) {
 			var buf bytes.Buffer
 			if err := client.DumpDeadLetterQueue("some bad queue", &buf); !errors.Is(err, badDelete) {
 				t.Errorf("expected Exec error missing: %v", err)
+			}
+		})
+	})
+	t.Run("queue", func(t *testing.T) {
+		t.Run("bad TX", func(t *testing.T) {
+			client, mock := setup()
+			q := client.Queue("queue")
+			badTx := errors.New("transaction begin error")
+			mock.ExpectBegin().WillReturnError(badTx)
+			if err := q.Push([]byte("msg")); !errors.Is(err, badTx) {
+				t.Errorf("expected TX error missing: %v", err)
+			}
+		})
+		t.Run("bad INSERT", func(t *testing.T) {
+			client, mock := setup()
+			q := client.Queue("queue")
+			badInsert := errors.New("insert error")
+			mock.ExpectBegin()
+			mock.ExpectExec("INSERT INTO").WillReturnError(badInsert)
+			if err := q.Push([]byte("msg")); !errors.Is(err, badInsert) {
+				t.Errorf("expected exec error missing: %v", err)
+			}
+		})
+		t.Run("bad NOTIFY", func(t *testing.T) {
+			client, mock := setup()
+			q := client.Queue("queue")
+			badNotify := errors.New("notify error")
+			mock.ExpectBegin()
+			mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(1, 1))
+			mock.ExpectExec("NOTIFY").WillReturnError(badNotify)
+			if err := q.Push([]byte("msg")); !errors.Is(err, badNotify) {
+				t.Errorf("expected exec error missing: %v", err)
+			}
+		})
+		t.Run("bad commit", func(t *testing.T) {
+			client, mock := setup()
+			q := client.Queue("queue")
+			badCommit := errors.New("notify error")
+			mock.ExpectBegin()
+			mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(1, 1))
+			mock.ExpectExec("NOTIFY").WillReturnResult(sqlmock.NewResult(1, 1))
+			mock.ExpectCommit().WillReturnError(badCommit)
+			if err := q.Push([]byte("msg")); !errors.Is(err, badCommit) {
+				t.Errorf("expected commit error missing: %v", err)
+			}
+		})
+		t.Run("deadlocked commit", func(t *testing.T) {
+			client, mock := setup()
+			q := client.Queue("queue")
+			deadLockCommit := &pq.Error{Code: "40001"}
+			mock.ExpectBegin()
+			mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(1, 1))
+			mock.ExpectExec("NOTIFY").WillReturnResult(sqlmock.NewResult(1, 1))
+			mock.ExpectCommit().WillReturnError(deadLockCommit)
+			mock.ExpectBegin()
+			mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(1, 1))
+			mock.ExpectExec("NOTIFY").WillReturnResult(sqlmock.NewResult(1, 1))
+			mock.ExpectCommit()
+			if err := q.Push([]byte("msg")); err != nil {
+				t.Errorf("unexpected commit error: %v", err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Errorf("unmet expectation error: %s", err)
 			}
 		})
 	})
