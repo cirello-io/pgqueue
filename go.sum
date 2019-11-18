@@ -1,3 +1,5 @@
+cirello.io/pidctl v0.0.0-20190928202547-4de6d176759b h1:FW8u9MlPDYNs5P7lbXSu1SMpKEtHVvxUp7l6kp+apc4=
+cirello.io/pidctl v0.0.0-20190928202547-4de6d176759b/go.mod h1:Z2ma8nptGwhEV1alsseW1d5Pvv+v3/BtwFFPs1W3j0s=
 github.com/DATA-DOG/go-sqlmock v1.3.3 h1:CWUqKXe0s8A2z6qCgkP4Kru7wC11YoAnoupUKFDnH08=
 github.com/DATA-DOG/go-sqlmock v1.3.3/go.mod h1:f/Ixk793poVmq4qj/V1dPUg2JEAKC73Q5eFN3EC/SaM=
 github.com/lib/pq v1.2.0 h1:LXpIM/LZ5xGFhOpXAQUIMM1HdyqzVYM13zNdjCEEcA0=

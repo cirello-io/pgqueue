@@ -20,9 +20,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"sync"
 	"time"
 
+	"cirello.io/pidctl"
 	"github.com/lib/pq"
 	"golang.org/x/sync/singleflight"
 )
@@ -176,6 +178,15 @@ func (c *Client) Queue(queue string, opts ...QueueOption) *Queue {
 		queue:         queue,
 		maxDeliveries: DefaultMaxDeliveriesCount,
 		closed:        make(chan struct{}),
+		vacuumPID: pidctl.Controller{
+			P:        big.NewRat(1, 5),
+			I:        big.NewRat(1, 100),
+			D:        big.NewRat(1, 15),
+			Min:      big.NewRat(-500, 1),
+			Max:      big.NewRat(+500, 1),
+			Setpoint: big.NewRat(60, 1), // target cycle length in seconds
+		},
+		vacuumCurrentPageSize: 100,
 	}
 	for _, opt := range opts {
 		opt(q)
@@ -270,6 +281,8 @@ func (c *Client) CreateTable() error {
 	})
 }
 
+const vacuumFakeCycle = time.Nanosecond
+
 // Queue holds the configuration definition for one queue.
 type Queue struct {
 	client *Client
@@ -282,8 +295,10 @@ type Queue struct {
 	muStats     sync.RWMutex
 	vacuumStats VacuumStats
 
-	vacuumSingleflight singleflight.Group
-	vacuumTicker       *time.Ticker
+	vacuumSingleflight    singleflight.Group
+	vacuumTicker          *time.Ticker
+	vacuumPID             pidctl.Controller
+	vacuumCurrentPageSize uint64
 }
 
 // QueueOption reconfigure queue at invocation time.
@@ -327,6 +342,9 @@ func (q *Queue) Watch(lease time.Duration) *Watcher {
 
 // VacuumStats reports the consequences of the clean up.
 type VacuumStats struct {
+	// PageSize indicates how large the vacuum operation was in order to
+	// keep it short and non-disruptive.
+	PageSize uint64
 	// Done reports how many messages marked as Done were deleted.
 	Done int64
 	// Recovered reports how many expired messages marked as InProgress but
@@ -346,9 +364,29 @@ func (q *Queue) Vacuum() VacuumStats {
 		if q.isClosed() {
 			return stats, ErrAlreadyClosed
 		}
+		pageSize := q.vacuumCurrentPageSize
+		if pageSize < 0 {
+			return stats, nil
+		}
+		start := time.Now()
 		err := q.client.retry(func(tx *sql.Tx) (err error) {
 			stats = VacuumStats{}
-			res, err := tx.Exec(`DELETE FROM `+pq.QuoteIdentifier(q.client.tableName)+` WHERE queue = $1 AND state = $2`, q.queue, Done)
+			stats.PageSize = pageSize
+			res, err := tx.Exec(`
+				DELETE FROM
+					`+pq.QuoteIdentifier(q.client.tableName)+`
+				WHERE
+					id IN (
+						SELECT
+							id
+						FROM
+							`+pq.QuoteIdentifier(q.client.tableName)+`
+						WHERE
+							queue = $1
+							AND state = $2
+						LIMIT $3
+					)
+				`, q.queue, Done, pageSize)
 			if err != nil {
 				return fmt.Errorf("cannot store message: %w", err)
 			}
@@ -357,7 +395,25 @@ func (q *Queue) Vacuum() VacuumStats {
 				return fmt.Errorf("cannot calculate how many done messages were deleted: %w", err)
 			}
 			if q.maxDeliveries > 0 {
-				res, err = tx.Exec(`UPDATE `+pq.QuoteIdentifier(q.client.tableName)+` SET queue = $1 WHERE queue = $2 AND state = $3 AND deliveries > $4 AND leased_until < NOW()`, DefaultDeadLetterQueueNamePrefix+"-"+q.queue, q.queue, InProgress, q.maxDeliveries)
+				res, err = tx.Exec(`
+					UPDATE
+						`+pq.QuoteIdentifier(q.client.tableName)+`
+					SET
+						queue = $1
+					WHERE
+						id IN (
+							SELECT
+								id
+							FROM
+								`+pq.QuoteIdentifier(q.client.tableName)+`
+							WHERE
+								queue = $2
+								AND state = $3
+								AND deliveries > $4
+								AND leased_until < NOW()
+							LIMIT $5
+						)
+					`, DefaultDeadLetterQueueNamePrefix+"-"+q.queue, q.queue, InProgress, q.maxDeliveries, pageSize)
 				if err != nil {
 					return fmt.Errorf("cannot move messaged to dead letter queue: %w", err)
 				}
@@ -365,7 +421,25 @@ func (q *Queue) Vacuum() VacuumStats {
 				if err != nil {
 					return fmt.Errorf("cannot calculate how many messages were moved to the dead letter queue: %w", err)
 				}
-				res, err = tx.Exec(`UPDATE `+pq.QuoteIdentifier(q.client.tableName)+` SET state = $1 WHERE queue = $2 AND state = $3 AND deliveries <= $4 AND leased_until < NOW()`, New, q.queue, InProgress, q.maxDeliveries)
+				res, err = tx.Exec(`
+					UPDATE
+						`+pq.QuoteIdentifier(q.client.tableName)+`
+					SET
+						state = $1
+					WHERE
+						id IN (
+							SELECT
+								id
+							FROM
+								`+pq.QuoteIdentifier(q.client.tableName)+`
+							WHERE
+								queue = $2
+								AND state = $3
+								AND deliveries <= $4
+								AND leased_until < NOW()
+							LIMIT $5
+						)
+					`, New, q.queue, InProgress, q.maxDeliveries, pageSize)
 				if err != nil {
 					return fmt.Errorf("cannot recover messages: %w", err)
 				}
@@ -376,6 +450,10 @@ func (q *Queue) Vacuum() VacuumStats {
 			}
 			return nil
 		})
+		duration, _ := big.NewFloat(time.Since(start).Seconds()).Rat(nil)
+		acc := q.vacuumPID.Accumulate(duration, vacuumFakeCycle)
+		pageSizeBigInt, _ := big.NewFloat(0).SetRat(acc).Int(nil)
+		q.vacuumCurrentPageSize += pageSizeBigInt.Uint64()
 		return stats, err
 	})
 	stats := v.(VacuumStats)
@@ -531,6 +609,7 @@ func (q *Queue) runAutoVacuum() {
 		case <-q.vacuumTicker.C:
 			stats := q.Vacuum()
 			q.muStats.Lock()
+			q.vacuumStats.PageSize = stats.PageSize
 			q.vacuumStats.Done += stats.Done
 			q.vacuumStats.Recovered += stats.Recovered
 			q.vacuumStats.Dead += stats.Dead

@@ -148,36 +148,66 @@ func TestOverload(t *testing.T) {
 	})
 }
 
-func TestCustomAutoVacuum(t *testing.T) {
-	client, err := Open(dsn)
-	if err != nil {
-		t.Fatal("cannot open database connection:", err)
-	}
-	defer client.Close()
-	if err := client.CreateTable(); err != nil {
-		t.Fatal("cannot create queue table:", err)
-	}
-	const freq = 100 * time.Millisecond
-	ticker := time.NewTicker(freq)
-	queue := client.Queue("queue-custom-autovacuum", WithAutoVacuum(ticker))
-	defer queue.Close()
-	if err := queue.Push([]byte("content")); err != nil {
-		t.Fatal("cannot push content:", err)
-	}
-	if _, err := queue.Pop(); err != nil {
-		t.Fatal("cannot pop content:", err)
-	}
-	time.Sleep(freq * 2)
-	stats := queue.VacuumStats()
-	if stats.Err != nil {
-		t.Fatal("unexpected error found on vacuum stats:", err)
-	}
-	t.Log(stats.Done)
-	t.Log(stats.Recovered)
-	t.Log(stats.Dead)
-	if stats.Done != 1 || stats.Recovered != 0 || stats.Dead != 0 {
-		t.Fatal("auto-vacuum failed")
-	}
+func TestCustomVacuum(t *testing.T) {
+	t.Run("small autovacuum", func(t *testing.T) {
+		client, err := Open(dsn)
+		if err != nil {
+			t.Fatal("cannot open database connection:", err)
+		}
+		defer client.Close()
+		if err := client.CreateTable(); err != nil {
+			t.Fatal("cannot create queue table:", err)
+		}
+		const freq = 100 * time.Millisecond
+		ticker := time.NewTicker(freq)
+		queue := client.Queue("queue-custom-small-autovacuum", WithAutoVacuum(ticker))
+		defer queue.Close()
+		if err := queue.Push([]byte("content")); err != nil {
+			t.Fatal("cannot push content:", err)
+		}
+		if _, err := queue.Pop(); err != nil {
+			t.Fatal("cannot pop content:", err)
+		}
+		time.Sleep(freq * 2)
+		stats := queue.VacuumStats()
+		if stats.Err != nil {
+			t.Fatal("unexpected error found on vacuum stats:", err)
+		}
+		t.Log(stats.Done)
+		t.Log(stats.Recovered)
+		t.Log(stats.Dead)
+		if stats.Done != 1 || stats.Recovered != 0 || stats.Dead != 0 {
+			t.Fatal("auto-vacuum failed")
+		}
+	})
+	t.Run("large manual vacuum", func(t *testing.T) {
+		client, err := Open(dsn)
+		if err != nil {
+			t.Fatal("cannot open database connection:", err)
+		}
+		defer client.Close()
+		if err := client.CreateTable(); err != nil {
+			t.Fatal("cannot create queue table:", err)
+		}
+		queue := client.Queue("queue-custom-large-vacuum")
+		defer queue.Close()
+		for i := 0; i < 1_000; i++ {
+			if err := queue.Push([]byte("content")); err != nil {
+				t.Fatal("cannot push message to queue:", err)
+			}
+			if _, err := queue.Pop(); err != nil {
+				t.Fatal("cannot pop message from queue:", err)
+			}
+		}
+		for {
+			stats := queue.Vacuum()
+			t.Logf("%d %#v", stats.PageSize, stats)
+			if stats.Done == 0 {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	})
 }
 
 type badWriter struct{}
