@@ -166,8 +166,8 @@ func TestCustomAutoVacuum(t *testing.T) {
 		t.Fatal("cannot create queue table:", err)
 	}
 	const freq = 100 * time.Millisecond
-	timer := time.NewTimer(freq)
-	queue := client.Queue("queue-custom-autovacuum", WithAutoVacuum(timer))
+	ticker := time.NewTicker(freq)
+	queue := client.Queue("queue-custom-autovacuum", WithAutoVacuum(ticker))
 	defer queue.Close()
 	if err := queue.Push([]byte("content")); err != nil {
 		t.Fatal("cannot push content:", err)

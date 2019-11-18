@@ -179,7 +179,7 @@ func (c *Client) Queue(queue string, opts ...QueueOption) *Queue {
 	for _, opt := range opts {
 		opt(q)
 	}
-	if q.vacuumTimer != nil {
+	if q.vacuumTicker != nil {
 		go q.runVacuum()
 	}
 	return q
@@ -275,7 +275,7 @@ type Queue struct {
 
 	queue         string
 	maxDeliveries int
-	vacuumTimer   *time.Timer
+	vacuumTicker  *time.Ticker
 	closeOnce     sync.Once
 	closed        chan struct{}
 
@@ -295,12 +295,12 @@ func WithMaxDeliveries(maxDeliveries int) QueueOption {
 }
 
 // WithAutoVacuum enabled auto-vacuum.
-func WithAutoVacuum(timer *time.Timer) QueueOption {
+func WithAutoVacuum(timer *time.Ticker) QueueOption {
 	return func(q *Queue) {
-		if q.vacuumTimer != nil {
-			q.vacuumTimer.Stop()
+		if q.vacuumTicker != nil {
+			q.vacuumTicker.Stop()
 		}
-		q.vacuumTimer = timer
+		q.vacuumTicker = timer
 	}
 }
 
@@ -495,8 +495,8 @@ func (q *Queue) Pop() ([]byte, error) {
 func (q *Queue) Close() error {
 	err := ErrAlreadyClosed
 	q.closeOnce.Do(func() {
-		if q.vacuumTimer != nil {
-			q.vacuumTimer.Stop()
+		if q.vacuumTicker != nil {
+			q.vacuumTicker.Stop()
 		}
 		close(q.closed)
 		err = nil
@@ -522,7 +522,7 @@ func (q *Queue) runVacuum() {
 		select {
 		case <-q.closed:
 			return
-		case <-q.vacuumTimer.C:
+		case <-q.vacuumTicker.C:
 			stats := q.Vacuum()
 			q.muStats.Lock()
 			q.vacuumStats.Done += stats.Done
