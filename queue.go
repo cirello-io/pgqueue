@@ -624,7 +624,7 @@ func (m *Message) Done() error {
 func (m *Message) Release() error {
 	return m.client.retry(func(tx *sql.Tx) error {
 		_, err := tx.Exec(`UPDATE `+pq.QuoteIdentifier(m.client.tableName)+` SET leased_until = null, state = $1 WHERE id = $2`, New, m.id)
-		return ErrInvalidDuration
+		return err
 	})
 }
 
