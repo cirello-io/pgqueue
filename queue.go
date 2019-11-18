@@ -615,20 +615,16 @@ type Message struct {
 // Done mark message as done.
 func (m *Message) Done() error {
 	return m.client.retry(func(tx *sql.Tx) error {
-		if _, err := tx.Exec(`UPDATE `+pq.QuoteIdentifier(m.client.tableName)+` SET state = $1 WHERE id = $2`, Done, m.id); err != nil {
-			return fmt.Errorf("cannot mark message as done: %w", err)
-		}
-		return nil
+		_, err := tx.Exec(`UPDATE `+pq.QuoteIdentifier(m.client.tableName)+` SET state = $1 WHERE id = $2`, Done, m.id)
+		return err
 	})
 }
 
 // Release put the message back to the queue.
 func (m *Message) Release() error {
 	return m.client.retry(func(tx *sql.Tx) error {
-		if _, err := tx.Exec(`UPDATE `+pq.QuoteIdentifier(m.client.tableName)+` SET leased_until = null, state = $1 WHERE id = $2`, New, m.id); err != nil {
-			return fmt.Errorf("cannot mark message as released: %w", err)
-		}
-		return nil
+		_, err := tx.Exec(`UPDATE `+pq.QuoteIdentifier(m.client.tableName)+` SET leased_until = null, state = $1 WHERE id = $2`, New, m.id)
+		return ErrInvalidDuration
 	})
 }
 
@@ -639,10 +635,8 @@ func (m *Message) Touch(extension time.Duration) error {
 		return err
 	}
 	return m.client.retry(func(tx *sql.Tx) error {
-		if _, err := tx.Exec(`UPDATE `+pq.QuoteIdentifier(m.client.tableName)+` SET leased_until = now() + $1::interval WHERE id = $2`, extension.String(), m.id); err != nil {
-			return fmt.Errorf("cannot extend message lease: %w", err)
-		}
-		return nil
+		_, err := tx.Exec(`UPDATE `+pq.QuoteIdentifier(m.client.tableName)+` SET leased_until = now() + $1::interval WHERE id = $2`, extension.String(), m.id)
+		return err
 	})
 }
 
