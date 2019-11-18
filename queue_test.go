@@ -165,7 +165,7 @@ func TestCustomAutoVacuum(t *testing.T) {
 	}
 	const freq = 100 * time.Millisecond
 	timer := time.NewTimer(freq)
-	queue := client.Queue("queue-custom-autovacuum", WithCustomAutoVacuum(timer))
+	queue := client.Queue("queue-custom-autovacuum", WithAutoVacuum(timer))
 	defer queue.Close()
 	if err := queue.Push([]byte("content")); err != nil {
 		t.Fatal("cannot push content:", err)

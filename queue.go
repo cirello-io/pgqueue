@@ -294,8 +294,8 @@ func WithMaxDeliveries(maxDeliveries int) QueueOption {
 	}
 }
 
-// WithCustomAutoVacuum replaces the default auto-vacuum timer.
-func WithCustomAutoVacuum(timer *time.Timer) QueueOption {
+// WithAutoVacuum enabled auto-vacuum.
+func WithAutoVacuum(timer *time.Timer) QueueOption {
 	return func(q *Queue) {
 		if q.vacuumTimer != nil {
 			q.vacuumTimer.Stop()
