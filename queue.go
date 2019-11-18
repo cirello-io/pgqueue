@@ -365,9 +365,6 @@ func (q *Queue) Vacuum() VacuumStats {
 			return stats, ErrAlreadyClosed
 		}
 		pageSize := q.vacuumCurrentPageSize
-		if pageSize < 0 {
-			return stats, nil
-		}
 		start := time.Now()
 		err := q.client.retry(func(tx *sql.Tx) (err error) {
 			stats = VacuumStats{}
@@ -384,7 +381,7 @@ func (q *Queue) Vacuum() VacuumStats {
 						WHERE
 							queue = $1
 							AND state = $2
-						LIMIT $3
+						LIMIT CASE WHEN $3 < 0 THEN 0 ELSE $3 END
 					)
 				`, q.queue, Done, pageSize)
 			if err != nil {
@@ -411,7 +408,7 @@ func (q *Queue) Vacuum() VacuumStats {
 								AND state = $3
 								AND deliveries > $4
 								AND leased_until < NOW()
-							LIMIT $5
+							LIMIT CASE WHEN $5 < 0 THEN 0 ELSE $5 END
 						)
 					`, DefaultDeadLetterQueueNamePrefix+"-"+q.queue, q.queue, InProgress, q.maxDeliveries, pageSize)
 				if err != nil {
@@ -437,7 +434,7 @@ func (q *Queue) Vacuum() VacuumStats {
 								AND state = $3
 								AND deliveries <= $4
 								AND leased_until < NOW()
-							LIMIT $5
+							LIMIT CASE WHEN $5 < 0 THEN 0 ELSE $5 END
 						)
 					`, New, q.queue, InProgress, q.maxDeliveries, pageSize)
 				if err != nil {
