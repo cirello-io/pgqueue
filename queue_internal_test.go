@@ -148,4 +148,121 @@ func TestDBErrorHandling(t *testing.T) {
 			}
 		})
 	})
+	t.Run("vacuum", func(t *testing.T) {
+		t.Run("bad DELETE", func(t *testing.T) {
+			client, mock := setup()
+			q := client.Queue("queue", DisableAutoVacuum())
+			badDelete := errors.New("delete error")
+			mock.ExpectBegin()
+			mock.ExpectExec("DELETE FROM").WillReturnError(badDelete)
+			if stats := q.Vacuum(); !errors.Is(stats.Err, badDelete) {
+				t.Errorf("expected exec error missing: %v", stats.Err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Error("mock expectation error:", err)
+			}
+		})
+		t.Run("bad DELETE result", func(t *testing.T) {
+			client, mock := setup()
+			q := client.Queue("queue", DisableAutoVacuum())
+			badDeleteResult := errors.New("delete result error")
+			mock.ExpectBegin()
+			mock.ExpectExec("DELETE FROM").WillReturnResult(sqlmock.NewErrorResult(badDeleteResult))
+			if stats := q.Vacuum(); !errors.Is(stats.Err, badDeleteResult) {
+				t.Errorf("expected exec error missing: %v", stats.Err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Error("mock expectation error:", err)
+			}
+		})
+		t.Run("bad 1st UPDATE", func(t *testing.T) {
+			client, mock := setup()
+			q := client.Queue("queue", DisableAutoVacuum())
+			badUpdate := errors.New("update error")
+			mock.ExpectBegin()
+			mock.ExpectExec("DELETE FROM").WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectExec("UPDATE \"queue\"").WillReturnError(badUpdate)
+			if stats := q.Vacuum(); !errors.Is(stats.Err, badUpdate) {
+				t.Errorf("expected exec error missing: %v", stats.Err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Error("mock expectation error:", err)
+			}
+		})
+		t.Run("bad 1st UPDATE result", func(t *testing.T) {
+			client, mock := setup()
+			q := client.Queue("queue", DisableAutoVacuum())
+			badUpdateResult := errors.New("update result error")
+			mock.ExpectBegin()
+			mock.ExpectExec("DELETE FROM").WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectExec("UPDATE \"queue\"").WillReturnResult(sqlmock.NewErrorResult(badUpdateResult))
+			if stats := q.Vacuum(); !errors.Is(stats.Err, badUpdateResult) {
+				t.Errorf("expected exec error missing: %v", stats.Err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Error("mock expectation error:", err)
+			}
+		})
+		t.Run("bad 2nd UPDATE", func(t *testing.T) {
+			client, mock := setup()
+			q := client.Queue("queue", DisableAutoVacuum())
+			badUpdate := errors.New("update error")
+			mock.ExpectBegin()
+			mock.ExpectExec("DELETE FROM").WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectExec("UPDATE \"queue\"").WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectExec("UPDATE \"queue\"").WillReturnError(badUpdate)
+			if stats := q.Vacuum(); !errors.Is(stats.Err, badUpdate) {
+				t.Errorf("expected exec error missing: %v", stats.Err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Error("mock expectation error:", err)
+			}
+		})
+		t.Run("bad 2nd UPDATE result", func(t *testing.T) {
+			client, mock := setup()
+			q := client.Queue("queue", DisableAutoVacuum())
+			badUpdateResult := errors.New("update result error")
+			mock.ExpectBegin()
+			mock.ExpectExec("DELETE FROM").WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectExec("UPDATE \"queue\"").WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectExec("UPDATE \"queue\"").WillReturnResult(sqlmock.NewErrorResult(badUpdateResult))
+			if stats := q.Vacuum(); !errors.Is(stats.Err, badUpdateResult) {
+				t.Errorf("expected exec error missing: %v", stats.Err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Error("mock expectation error:", err)
+			}
+		})
+		t.Run("bad transaction", func(t *testing.T) {
+			client, mock := setup()
+			q := client.Queue("queue", DisableAutoVacuum())
+			badCommit := errors.New("update result error")
+			mock.ExpectBegin()
+			mock.ExpectExec("DELETE FROM").WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectExec("UPDATE \"queue\"").WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectExec("UPDATE \"queue\"").WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectCommit().WillReturnError(badCommit)
+			if stats := q.Vacuum(); !errors.Is(stats.Err, badCommit) {
+				t.Errorf("expected exec error missing: %v", stats.Err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Error("mock expectation error:", err)
+			}
+		})
+		t.Run("full transaction", func(t *testing.T) {
+			client, mock := setup()
+			q := client.Queue("queue", DisableAutoVacuum())
+			mock.ExpectBegin()
+			mock.ExpectExec("DELETE FROM").WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectExec("UPDATE \"queue\"").WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectExec("UPDATE \"queue\"").WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectCommit()
+			if stats := q.Vacuum(); stats.Err != nil {
+				t.Errorf("unexpected error: %v", stats.Err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Error("mock expectation error:", err)
+			}
+		})
+	})
 }
