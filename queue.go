@@ -325,16 +325,6 @@ func DisableAutoVacuum() QueueOption {
 	}
 }
 
-// WithAutoVacuum enabled auto-vacuum.
-func WithAutoVacuum(timer *time.Ticker) QueueOption {
-	return func(q *Queue) {
-		if q.vacuumTicker != nil {
-			q.vacuumTicker.Stop()
-		}
-		q.vacuumTicker = timer
-	}
-}
-
 // VacuumStats reports the result of the last vacuum cycle.
 func (q *Queue) VacuumStats() VacuumStats {
 	q.muStats.RLock()
