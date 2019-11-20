@@ -628,7 +628,7 @@ type Watcher struct {
 
 // how frequently the next call is going to ping the database if nothing
 // comes from the notification channel.
-const missedNotificationTimer = 5 * time.Second
+const missedNotificationFrequency = 500 * time.Millisecond
 
 // Next waits for the next message to arrive and store it into Watcher.
 func (w *Watcher) Next() bool {
@@ -644,6 +644,8 @@ func (w *Watcher) Next() bool {
 		unsub()
 		return false
 	}
+	tick := time.NewTicker(missedNotificationFrequency)
+	defer tick.Stop()
 	for {
 		switch msg, err := w.queue.Reserve(w.lease); err {
 		case ErrEmptyQueue:
@@ -658,7 +660,8 @@ func (w *Watcher) Next() bool {
 		}
 		select {
 		case <-w.notifications:
-		case <-time.After(missedNotificationTimer):
+		case <-tick.C:
+			go w.queue.client.listener.Ping()
 		}
 	}
 }
