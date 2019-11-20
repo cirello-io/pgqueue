@@ -69,16 +69,18 @@ const (
 	vacuumInitialPageSize        = 1000
 )
 
-var vacuumPIDController = &pidctl.Controller{
-	// each adjusment step must be +/- 500 rows
-	P:   big.NewRat(500, 1),
-	I:   big.NewRat(3, 1),
-	D:   big.NewRat(3, 1),
-	Min: big.NewRat(-500, 1),
-	Max: big.NewRat(+500, 1),
-	// 1s every 6s cycle.
-	// 10 cycles per minute.
-	Setpoint: big.NewRat(1, 1),
+func vacuumPIDController() *pidctl.Controller {
+	return &pidctl.Controller{
+		// each adjusment step must be +/- 500 rows
+		P:   big.NewRat(500, 1),
+		I:   big.NewRat(3, 1),
+		D:   big.NewRat(3, 1),
+		Min: big.NewRat(-500, 1),
+		Max: big.NewRat(+500, 1),
+		// 1s every 6s cycle.
+		// 10 cycles per minute.
+		Setpoint: big.NewRat(1, 1),
+	}
 }
 
 // State indicates the possible states of a message
@@ -199,7 +201,7 @@ func (c *Client) Queue(queue string, opts ...QueueOption) *Queue {
 		vacuumTicker:          ticker,
 		maxDeliveries:         DefaultMaxDeliveriesCount,
 		closed:                make(chan struct{}),
-		vacuumPID:             vacuumPIDController,
+		vacuumPID:             vacuumPIDController(),
 		vacuumCurrentPageSize: vacuumInitialPageSize,
 	}
 	for _, opt := range opts {
