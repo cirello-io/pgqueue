@@ -172,24 +172,29 @@ func (c *Client) Close() error {
 	return nil
 }
 
+var defaultVacuumPIDController = &pidctl.Controller{
+	// each adjusment step must be +/- 500 rows
+	P:   big.NewRat(500, 1),
+	I:   big.NewRat(3, 1),
+	D:   big.NewRat(3, 1),
+	Min: big.NewRat(-500, 1),
+	Max: big.NewRat(+500, 1),
+	// 1s every 6s cycle.
+	// 10 cycles per minute.
+	Setpoint: big.NewRat(1, 1),
+}
+
 // Queue configures a queue.
 func (c *Client) Queue(queue string, opts ...QueueOption) *Queue {
 	ticker := time.NewTicker(defaultVacuumFrequency)
 	q := &Queue{
-		client:        c,
-		queue:         queue,
-		vacuumTicker:  ticker,
-		maxDeliveries: DefaultMaxDeliveriesCount,
-		closed:        make(chan struct{}),
-		vacuumPID: pidctl.Controller{
-			P:        big.NewRat(1, 5),
-			I:        big.NewRat(1, 100),
-			D:        big.NewRat(1, 15),
-			Min:      big.NewRat(-500, 1),
-			Max:      big.NewRat(+500, 1),
-			Setpoint: big.NewRat(60, 1), // target cycle length in seconds
-		},
-		vacuumCurrentPageSize: 100,
+		client:                c,
+		queue:                 queue,
+		vacuumTicker:          ticker,
+		maxDeliveries:         DefaultMaxDeliveriesCount,
+		closed:                make(chan struct{}),
+		vacuumPID:             defaultVacuumPIDController,
+		vacuumCurrentPageSize: 1000,
 	}
 	for _, opt := range opts {
 		opt(q)
@@ -300,8 +305,8 @@ type Queue struct {
 
 	vacuumSingleflight    singleflight.Group
 	vacuumTicker          *time.Ticker
-	vacuumPID             pidctl.Controller
-	vacuumCurrentPageSize uint64
+	vacuumPID             *pidctl.Controller
+	vacuumCurrentPageSize int64
 }
 
 // QueueOption reconfigure queue at invocation time.
@@ -347,7 +352,7 @@ func (q *Queue) Watch(lease time.Duration) *Watcher {
 type VacuumStats struct {
 	// PageSize indicates how large the vacuum operation was in order to
 	// keep it short and non-disruptive.
-	PageSize uint64
+	PageSize int64
 	// Done reports how many messages marked as Done were deleted.
 	Done int64
 	// Recovered reports how many expired messages marked as InProgress but
@@ -453,7 +458,7 @@ func (q *Queue) Vacuum() VacuumStats {
 		duration, _ := big.NewFloat(time.Since(start).Seconds()).Rat(nil)
 		acc := q.vacuumPID.Accumulate(duration, vacuumFakeCycle)
 		pageSizeBigInt, _ := big.NewFloat(0).SetRat(acc).Int(nil)
-		q.vacuumCurrentPageSize += pageSizeBigInt.Uint64()
+		q.vacuumCurrentPageSize += pageSizeBigInt.Int64()
 		return stats, err
 	})
 	stats := v.(VacuumStats)

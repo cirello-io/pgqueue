@@ -16,6 +16,7 @@ package pgqueue
 import (
 	"bytes"
 	"errors"
+	"math/big"
 	"os"
 	"strings"
 	"sync"
@@ -493,5 +494,17 @@ func TestSaturatedNotifications(t *testing.T) {
 	q.Close()
 	if <-next {
 		t.Error("next should have been false after close")
+	}
+}
+
+func TestExposePID(t *testing.T) {
+	pageSize := int64(1000)
+	t.Log(0, 0, pageSize)
+	for i := 100 * time.Millisecond; i < 2*time.Second; i += 100 * time.Millisecond {
+		duration, _ := big.NewFloat(i.Seconds()).Rat(nil)
+		acc := defaultVacuumPIDController.Accumulate(duration, vacuumFakeCycle)
+		pageSizeBigInt, _ := big.NewFloat(0).SetRat(acc).Int(nil)
+		pageSize += pageSizeBigInt.Int64()
+		t.Log(i.Seconds(), pageSizeBigInt.Int64(), pageSize)
 	}
 }
