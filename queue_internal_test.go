@@ -85,7 +85,7 @@ func TestDBErrorHandling(t *testing.T) {
 			}
 		})
 	})
-	t.Run("queue", func(t *testing.T) {
+	t.Run("push", func(t *testing.T) {
 		t.Run("bad TX", func(t *testing.T) {
 			client, mock := setup()
 			q := client.Queue("queue")
