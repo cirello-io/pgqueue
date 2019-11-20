@@ -65,6 +65,9 @@ func TestDBErrorHandling(t *testing.T) {
 			if err := client.DumpDeadLetterQueue("some bad queue", nil); !errors.Is(err, badQuery) {
 				t.Errorf("expected SELECT error missing: %v", err)
 			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Errorf("unmet expectation error: %s", err)
+			}
 		})
 		t.Run("bad row", func(t *testing.T) {
 			client, mock := setup()
@@ -72,6 +75,9 @@ func TestDBErrorHandling(t *testing.T) {
 			var buf bytes.Buffer
 			if err := client.DumpDeadLetterQueue("some bad queue", &buf); err == nil {
 				t.Errorf("expected Scan error missing: %v", err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Errorf("unmet expectation error: %s", err)
 			}
 		})
 		t.Run("bad delete", func(t *testing.T) {
@@ -82,6 +88,9 @@ func TestDBErrorHandling(t *testing.T) {
 			var buf bytes.Buffer
 			if err := client.DumpDeadLetterQueue("some bad queue", &buf); !errors.Is(err, badDelete) {
 				t.Errorf("expected Exec error missing: %v", err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Errorf("unmet expectation error: %s", err)
 			}
 		})
 	})
@@ -94,6 +103,9 @@ func TestDBErrorHandling(t *testing.T) {
 			if err := q.Push([]byte("msg")); !errors.Is(err, badTx) {
 				t.Errorf("expected TX error missing: %v", err)
 			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Errorf("unmet expectation error: %s", err)
+			}
 		})
 		t.Run("bad INSERT", func(t *testing.T) {
 			client, mock := setup()
@@ -103,6 +115,9 @@ func TestDBErrorHandling(t *testing.T) {
 			mock.ExpectExec("INSERT INTO").WillReturnError(badInsert)
 			if err := q.Push([]byte("msg")); !errors.Is(err, badInsert) {
 				t.Errorf("expected exec error missing: %v", err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Errorf("unmet expectation error: %s", err)
 			}
 		})
 		t.Run("bad NOTIFY", func(t *testing.T) {
@@ -115,6 +130,9 @@ func TestDBErrorHandling(t *testing.T) {
 			if err := q.Push([]byte("msg")); !errors.Is(err, badNotify) {
 				t.Errorf("expected exec error missing: %v", err)
 			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Errorf("unmet expectation error: %s", err)
+			}
 		})
 		t.Run("bad commit", func(t *testing.T) {
 			client, mock := setup()
@@ -126,6 +144,9 @@ func TestDBErrorHandling(t *testing.T) {
 			mock.ExpectCommit().WillReturnError(badCommit)
 			if err := q.Push([]byte("msg")); !errors.Is(err, badCommit) {
 				t.Errorf("expected commit error missing: %v", err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Errorf("unmet expectation error: %s", err)
 			}
 		})
 		t.Run("deadlocked commit", func(t *testing.T) {
