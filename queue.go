@@ -63,6 +63,24 @@ const (
 	defaultVacuumFrequency = 6 * time.Second // 10x per minute
 )
 
+// vacuum settings
+const (
+	vacuumPIDControllerFakeCycle = time.Nanosecond
+	vacuumInitialPageSize        = 1000
+)
+
+var vacuumPIDController = &pidctl.Controller{
+	// each adjusment step must be +/- 500 rows
+	P:   big.NewRat(500, 1),
+	I:   big.NewRat(3, 1),
+	D:   big.NewRat(3, 1),
+	Min: big.NewRat(-500, 1),
+	Max: big.NewRat(+500, 1),
+	// 1s every 6s cycle.
+	// 10 cycles per minute.
+	Setpoint: big.NewRat(1, 1),
+}
+
 // State indicates the possible states of a message
 type State string
 
@@ -172,18 +190,6 @@ func (c *Client) Close() error {
 	return nil
 }
 
-var defaultVacuumPIDController = &pidctl.Controller{
-	// each adjusment step must be +/- 500 rows
-	P:   big.NewRat(500, 1),
-	I:   big.NewRat(3, 1),
-	D:   big.NewRat(3, 1),
-	Min: big.NewRat(-500, 1),
-	Max: big.NewRat(+500, 1),
-	// 1s every 6s cycle.
-	// 10 cycles per minute.
-	Setpoint: big.NewRat(1, 1),
-}
-
 // Queue configures a queue.
 func (c *Client) Queue(queue string, opts ...QueueOption) *Queue {
 	ticker := time.NewTicker(defaultVacuumFrequency)
@@ -193,8 +199,8 @@ func (c *Client) Queue(queue string, opts ...QueueOption) *Queue {
 		vacuumTicker:          ticker,
 		maxDeliveries:         DefaultMaxDeliveriesCount,
 		closed:                make(chan struct{}),
-		vacuumPID:             defaultVacuumPIDController,
-		vacuumCurrentPageSize: 1000,
+		vacuumPID:             vacuumPIDController,
+		vacuumCurrentPageSize: vacuumInitialPageSize,
 	}
 	for _, opt := range opts {
 		opt(q)
@@ -288,8 +294,6 @@ func (c *Client) CreateTable() error {
 		return err
 	})
 }
-
-const vacuumFakeCycle = time.Nanosecond
 
 // Queue holds the configuration definition for one queue.
 type Queue struct {
@@ -456,7 +460,7 @@ func (q *Queue) Vacuum() VacuumStats {
 			return nil
 		})
 		duration, _ := big.NewFloat(time.Since(start).Seconds()).Rat(nil)
-		acc := q.vacuumPID.Accumulate(duration, vacuumFakeCycle)
+		acc := q.vacuumPID.Accumulate(duration, vacuumPIDControllerFakeCycle)
 		pageSizeBigInt, _ := big.NewFloat(0).SetRat(acc).Int(nil)
 		q.vacuumCurrentPageSize += pageSizeBigInt.Int64()
 		return stats, err
