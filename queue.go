@@ -59,7 +59,8 @@ const DefaultDeadLetterQueueNamePrefix = "deadletter"
 
 // reasonable defaults
 const (
-	defaultTableName = "queue"
+	defaultTableName       = "queue"
+	defaultVacuumFrequency = 6 * time.Second // 10x per minute
 )
 
 // State indicates the possible states of a message
@@ -173,9 +174,11 @@ func (c *Client) Close() error {
 
 // Queue configures a queue.
 func (c *Client) Queue(queue string, opts ...QueueOption) *Queue {
+	ticker := time.NewTicker(defaultVacuumFrequency)
 	q := &Queue{
 		client:        c,
 		queue:         queue,
+		vacuumTicker:  ticker,
 		maxDeliveries: DefaultMaxDeliveriesCount,
 		closed:        make(chan struct{}),
 		vacuumPID: pidctl.Controller{
@@ -309,6 +312,16 @@ type QueueOption func(q *Queue)
 func WithMaxDeliveries(maxDeliveries int) QueueOption {
 	return func(q *Queue) {
 		q.maxDeliveries = maxDeliveries
+	}
+}
+
+// DisableAutoVacuum forces the use of manual queue clean up.
+func DisableAutoVacuum() QueueOption {
+	return func(q *Queue) {
+		if q.vacuumTicker != nil {
+			q.vacuumTicker.Stop()
+		}
+		q.vacuumTicker = nil
 	}
 }
 

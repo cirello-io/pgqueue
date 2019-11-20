@@ -39,7 +39,7 @@ func TestOverload(t *testing.T) {
 		if err := client.CreateTable(); err != nil {
 			t.Fatal("cannot create queue table:", err)
 		}
-		queue := client.Queue("queue-overload-pop-push")
+		queue := client.Queue("queue-overload-pop-push", DisableAutoVacuum())
 		defer queue.Close()
 		t.Log("vacuuming the queue")
 		if stats := queue.Vacuum(); stats.Err != nil {
@@ -101,7 +101,7 @@ func TestOverload(t *testing.T) {
 		if err := client.CreateTable(); err != nil {
 			t.Fatal("cannot create queue table:", err)
 		}
-		queue := client.Queue("queue-overload-pop-reserve-done")
+		queue := client.Queue("queue-overload-pop-reserve-done", DisableAutoVacuum())
 		defer queue.Close()
 		t.Log("vacuuming the queue")
 		if stats := queue.Vacuum(); stats.Err != nil {
@@ -238,6 +238,7 @@ func TestDeadletterDump(t *testing.T) {
 		queue := client.Queue(
 			"example-deadletter-queue",
 			WithMaxDeliveries(1),
+			DisableAutoVacuum(),
 		)
 		defer queue.Close()
 		content := []byte("the message")
@@ -272,6 +273,7 @@ func TestDeadletterDump(t *testing.T) {
 		queue := client.Queue(
 			"example-deadletter-queue-bad-writer",
 			WithMaxDeliveries(1),
+			DisableAutoVacuum(),
 		)
 		defer queue.Close()
 		content := []byte("the message")
@@ -413,7 +415,7 @@ func TestValidationErrors(t *testing.T) {
 		t.Fatal("cannot open database connection:", err)
 	}
 	defer client.Close()
-	q := client.Queue("closed-client-queue")
+	q := client.Queue("closed-client-queue", DisableAutoVacuum())
 	defer q.Close()
 	if err := q.Push(bytes.Repeat([]byte("A"), MaxMessageLength+1)); err != ErrMessageTooLarge {
 		t.Error("expected ErrMessageTooLarge:", err)
@@ -434,7 +436,7 @@ func TestWatchNextErrors(t *testing.T) {
 	}
 	defer client.Close()
 	t.Run("close while next", func(t *testing.T) {
-		q := client.Queue("close while next")
+		q := client.Queue("close while next", DisableAutoVacuum())
 		w := q.Watch(1 * time.Second)
 		go func() {
 			time.Sleep(1 * time.Second)
@@ -451,7 +453,7 @@ func TestWatchNextErrors(t *testing.T) {
 		}
 	})
 	t.Run("next after close", func(t *testing.T) {
-		q := client.Queue("next after close")
+		q := client.Queue("next after close", DisableAutoVacuum())
 		w := q.Watch(1 * time.Second)
 		q.Close()
 		if w.Next() {
@@ -477,9 +479,9 @@ func TestCrossQueueBump(t *testing.T) {
 	if err := client.CreateTable(); err != nil {
 		t.Fatal("cannot create queue table:", err)
 	}
-	qAlpha := client.Queue("cross-queue-bump-alpha")
+	qAlpha := client.Queue("cross-queue-bump-alpha", DisableAutoVacuum())
 	defer qAlpha.Close()
-	qBravo := client.Queue("cross-queue-bump-bravo")
+	qBravo := client.Queue("cross-queue-bump-bravo", DisableAutoVacuum())
 	defer qBravo.Close()
 	watchAlpha := qAlpha.Watch(time.Minute)
 	alphaGotMessage := make(chan bool, 1)
@@ -497,7 +499,7 @@ func TestCrossQueueBump(t *testing.T) {
 		msg := watchAlpha.Message().Content
 		t.Logf("msg: %s", msg)
 		t.Fatal("wrong bump")
-	case <-time.After(missedNotificationTimer):
+	case <-time.After(missedNotificationFrequency):
 		t.Log("watchAlpa.Next() was not affected by a message dispatched to qBravo")
 	}
 	if err := qAlpha.Push([]byte("message-alpha")); err != nil {
@@ -511,7 +513,7 @@ func TestCrossQueueBump(t *testing.T) {
 		if !bytes.Equal([]byte("message-alpha"), msg) {
 			t.Error("unexpected message found")
 		}
-	case <-time.After(missedNotificationTimer):
+	case <-time.After(missedNotificationFrequency):
 		t.Error("missed bump")
 	}
 }
@@ -527,7 +529,7 @@ func TestSaturatedNotifications(t *testing.T) {
 	if err := client.CreateTable(); err != nil {
 		t.Fatal("cannot create queue table:", err)
 	}
-	q := client.Queue("saturated-notifications")
+	q := client.Queue("saturated-notifications", DisableAutoVacuum())
 	defer q.Close()
 	// force Client.forwardNotifications to start dropping messages.
 	w := q.Watch(time.Minute)
