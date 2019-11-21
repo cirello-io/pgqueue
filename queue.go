@@ -69,20 +69,6 @@ const (
 	vacuumInitialPageSize        = 1000
 )
 
-func vacuumPIDController() *pidctl.Controller {
-	return &pidctl.Controller{
-		// each adjusment step must be +/- 500 rows
-		P:   big.NewRat(500, 1),
-		I:   big.NewRat(3, 1),
-		D:   big.NewRat(3, 1),
-		Min: big.NewRat(-500, 1),
-		Max: big.NewRat(+500, 1),
-		// 1s every 6s cycle.
-		// 10 cycles per minute.
-		Setpoint: big.NewRat(1, 1),
-	}
-}
-
 // State indicates the possible states of a message
 type State string
 
@@ -95,12 +81,25 @@ const (
 
 // Client uses a postgreSQL database to run a queue system.
 type Client struct {
-	tableName string
-	db        *sql.DB
-	listener  *pq.Listener
+	tableName          string
+	db                 *sql.DB
+	listener           *pq.Listener
+	queueMaxDeliveries int
+
+	closeOnce sync.Once
+	closed    chan struct{}
 
 	mu            sync.RWMutex
 	subscriptions map[chan struct{}]string
+	knownQueues   []*Queue
+
+	vacuumTicker          *time.Ticker
+	vacuumSingleflight    singleflight.Group
+	vacuumPID             pidctl.Controller
+	vacuumCurrentPageSize int64
+
+	muVacuumStats sync.RWMutex
+	vacuumStats   VacuumStats
 }
 
 // ClientOption reconfigures the behavior of the pgqueue Client.
@@ -110,6 +109,23 @@ type ClientOption func(*Client)
 func WithCustomTable(tableName string) ClientOption {
 	return func(c *Client) {
 		c.tableName = tableName
+	}
+}
+
+// WithMaxDeliveries indicates how many delivery attempts each message gets. If
+// zero, the client retries the message forever.
+func WithMaxDeliveries(maxDeliveries int) ClientOption {
+	return func(c *Client) {
+		c.queueMaxDeliveries = maxDeliveries
+	}
+}
+
+// DisableAutoVacuum forces the use of manual queue clean up.
+func DisableAutoVacuum() ClientOption {
+	return func(c *Client) {
+		if c.vacuumTicker != nil {
+			c.vacuumTicker.Stop()
+		}
 	}
 }
 
@@ -124,11 +140,29 @@ func Open(dsn string, opts ...ClientOption) (*Client, error) {
 		return nil, fmt.Errorf("cannot open database: %w", err)
 	}
 	listener := pq.NewListener(dsn, 1*time.Millisecond, 1*time.Millisecond, func(t pq.ListenerEventType, err error) {})
+
 	c := &Client{
 		tableName:     defaultTableName,
 		db:            db,
 		listener:      listener,
 		subscriptions: make(map[chan struct{}]string),
+
+		vacuumTicker:       time.NewTicker(defaultVacuumFrequency),
+		queueMaxDeliveries: DefaultMaxDeliveriesCount,
+		vacuumPID: pidctl.Controller{
+			// each adjusment step must be +/- 500 rows
+			P:   big.NewRat(500, 1),
+			I:   big.NewRat(3, 1),
+			D:   big.NewRat(3, 1),
+			Min: big.NewRat(-500, 1),
+			Max: big.NewRat(+500, 1),
+			// 1s every 6s cycle.
+			// 10 cycles per minute.
+			Setpoint: big.NewRat(1, 1),
+		},
+		vacuumCurrentPageSize: vacuumInitialPageSize,
+
+		closed: make(chan struct{}),
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -137,19 +171,66 @@ func Open(dsn string, opts ...ClientOption) (*Client, error) {
 		return nil, fmt.Errorf("cannot subscribe for notifications: %w", err)
 	}
 	go c.forwardNotifications()
+	if c.vacuumTicker != nil {
+		go c.runAutoVacuum()
+	}
 	return c, nil
+}
+
+func (c *Client) runAutoVacuum() {
+	for {
+		select {
+		case <-c.closed:
+			return
+		case <-c.vacuumTicker.C:
+			fmt.Println("running")
+			stats := c.Vacuum()
+			c.muVacuumStats.Lock()
+			c.vacuumStats.PageSize = stats.PageSize
+			c.vacuumStats.Done += stats.Done
+			c.vacuumStats.Recovered += stats.Recovered
+			c.vacuumStats.Dead += stats.Dead
+			c.vacuumStats.Err = stats.Err
+			c.muVacuumStats.Unlock()
+		}
+	}
+}
+
+// VacuumStats reports the result of the last vacuum cycle.
+func (c *Client) VacuumStats() VacuumStats {
+	c.muVacuumStats.RLock()
+	defer c.muVacuumStats.RUnlock()
+	return c.vacuumStats
+}
+
+func (c *Client) add(q *Queue) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.knownQueues = append(c.knownQueues, q)
+}
+
+func (c *Client) remove(q *Queue) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var knownQueues []*Queue
+	for _, knownQueue := range c.knownQueues {
+		if knownQueue != q {
+			knownQueues = append(knownQueues, q)
+		}
+	}
+	c.knownQueues = knownQueues
 }
 
 func (c *Client) subscribe(sub chan struct{}, queue string) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.subscriptions[sub] = queue
-	c.mu.Unlock()
 }
 
 func (c *Client) unsubscribe(sub chan struct{}) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	delete(c.subscriptions, sub)
-	c.mu.Unlock()
 }
 
 func (c *Client) forwardNotifications() {
@@ -181,35 +262,30 @@ func (e *ClientCloseError) Error() string {
 
 // Close stops the queue system.
 func (c *Client) Close() error {
-	listenerErr := c.listener.Close()
-	driverErr := c.db.Close()
-	if listenerErr != nil || driverErr != nil {
-		return &ClientCloseError{
-			ListenerError: listenerErr,
-			DriverError:   driverErr,
+	err := ErrAlreadyClosed
+	c.closeOnce.Do(func() {
+		err = nil
+		close(c.closed)
+		listenerErr := c.listener.Close()
+		driverErr := c.db.Close()
+		if listenerErr != nil || driverErr != nil {
+			err = &ClientCloseError{
+				ListenerError: listenerErr,
+				DriverError:   driverErr,
+			}
 		}
-	}
-	return nil
+	})
+	return err
 }
 
 // Queue configures a queue.
-func (c *Client) Queue(queue string, opts ...QueueOption) *Queue {
-	ticker := time.NewTicker(defaultVacuumFrequency)
+func (c *Client) Queue(queue string) *Queue {
 	q := &Queue{
-		client:                c,
-		queue:                 queue,
-		vacuumTicker:          ticker,
-		maxDeliveries:         DefaultMaxDeliveriesCount,
-		closed:                make(chan struct{}),
-		vacuumPID:             vacuumPIDController(),
-		vacuumCurrentPageSize: vacuumInitialPageSize,
+		client: c,
+		queue:  queue,
+		closed: make(chan struct{}),
 	}
-	for _, opt := range opts {
-		opt(q)
-	}
-	if q.vacuumTicker != nil {
-		go q.runAutoVacuum()
-	}
+	c.add(q)
 	return q
 }
 
@@ -297,63 +373,6 @@ func (c *Client) CreateTable() error {
 	})
 }
 
-// Queue holds the configuration definition for one queue.
-type Queue struct {
-	client *Client
-
-	queue         string
-	maxDeliveries int
-	closeOnce     sync.Once
-	closed        chan struct{}
-
-	muStats     sync.RWMutex
-	vacuumStats VacuumStats
-
-	vacuumSingleflight    singleflight.Group
-	vacuumTicker          *time.Ticker
-	vacuumPID             *pidctl.Controller
-	vacuumCurrentPageSize int64
-}
-
-// QueueOption reconfigure queue at invocation time.
-type QueueOption func(q *Queue)
-
-// WithMaxDeliveries indicates how many delivery attempts each message gets. If
-// zero, the client retries the message forever.
-func WithMaxDeliveries(maxDeliveries int) QueueOption {
-	return func(q *Queue) {
-		q.maxDeliveries = maxDeliveries
-	}
-}
-
-// DisableAutoVacuum forces the use of manual queue clean up.
-func DisableAutoVacuum() QueueOption {
-	return func(q *Queue) {
-		if q.vacuumTicker != nil {
-			q.vacuumTicker.Stop()
-		}
-		q.vacuumTicker = nil
-	}
-}
-
-// VacuumStats reports the result of the last vacuum cycle.
-func (q *Queue) VacuumStats() VacuumStats {
-	q.muStats.RLock()
-	defer q.muStats.RUnlock()
-	return q.vacuumStats
-}
-
-// Watch observes new messages for the target queue.
-func (q *Queue) Watch(lease time.Duration) *Watcher {
-	w := &Watcher{
-		queue:         q,
-		notifications: make(chan struct{}, 1),
-		lease:         lease,
-	}
-	q.client.subscribe(w.notifications, q.queue)
-	return w
-}
-
 // VacuumStats reports the consequences of the clean up.
 type VacuumStats struct {
 	// PageSize indicates how large the vacuum operation was in order to
@@ -372,104 +391,136 @@ type VacuumStats struct {
 }
 
 // Vacuum cleans up the queue from done or dead messages.
-func (q *Queue) Vacuum() VacuumStats {
-	v, err, _ := q.vacuumSingleflight.Do("vacuum", func() (interface{}, error) {
+func (c *Client) Vacuum() VacuumStats {
+	v, err, _ := c.vacuumSingleflight.Do("vacuum", func() (interface{}, error) {
 		var stats VacuumStats
-		if q.isClosed() {
-			return stats, ErrAlreadyClosed
-		}
-		pageSize := q.vacuumCurrentPageSize
+		stats.PageSize = c.vacuumCurrentPageSize
 		start := time.Now()
-		err := q.client.retry(func(tx *sql.Tx) (err error) {
-			stats = VacuumStats{}
-			stats.PageSize = pageSize
-			res, err := tx.Exec(`
-				DELETE FROM
-					`+pq.QuoteIdentifier(q.client.tableName)+`
+		for _, q := range c.knownQueues {
+			s, err := c.vacuum(q)
+			stats.Done += s.Done
+			stats.Recovered += s.Recovered
+			stats.Dead += s.Dead
+			if stats.Err == nil && err != nil {
+				stats.Err = fmt.Errorf("vacuum error for %s: %w", q.queue, err)
+			}
+		}
+		duration, _ := big.NewFloat(time.Since(start).Seconds()).Rat(nil)
+		acc := c.vacuumPID.Accumulate(duration, vacuumPIDControllerFakeCycle)
+		pageSizeBigInt, _ := big.NewFloat(0).SetRat(acc).Int(nil)
+		c.vacuumCurrentPageSize += pageSizeBigInt.Int64()
+		return stats, stats.Err
+	})
+	stats := v.(VacuumStats)
+	stats.Err = err
+	return stats
+}
+
+func (c *Client) vacuum(q *Queue) (stats VacuumStats, err error) {
+	if q.isClosed() {
+		return stats, ErrAlreadyClosed
+	}
+	err = c.retry(func(tx *sql.Tx) (err error) {
+		stats = VacuumStats{}
+		res, err := tx.Exec(`
+			DELETE FROM
+				`+pq.QuoteIdentifier(c.tableName)+`
+			WHERE
+				id IN (
+					SELECT
+						id
+					FROM
+						`+pq.QuoteIdentifier(c.tableName)+`
+					WHERE
+						queue = $1
+						AND state = $2
+					LIMIT CASE WHEN $3 < 0 THEN 0 ELSE $3 END
+				)
+			`, q.queue, Done, c.vacuumCurrentPageSize)
+		if err != nil {
+			return fmt.Errorf("cannot store message: %w", err)
+		}
+		stats.Done, err = res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("cannot calculate how many done messages were deleted: %w", err)
+		}
+		if c.queueMaxDeliveries > 0 {
+			res, err = tx.Exec(`
+				UPDATE
+					`+pq.QuoteIdentifier(c.tableName)+`
+				SET
+					queue = $1
 				WHERE
 					id IN (
 						SELECT
 							id
 						FROM
-							`+pq.QuoteIdentifier(q.client.tableName)+`
+							`+pq.QuoteIdentifier(c.tableName)+`
 						WHERE
-							queue = $1
-							AND state = $2
-						LIMIT CASE WHEN $3 < 0 THEN 0 ELSE $3 END
+							queue = $2
+							AND state = $3
+							AND deliveries > $4
+							AND leased_until < NOW()
+						LIMIT CASE WHEN $5 < 0 THEN 0 ELSE $5 END
 					)
-				`, q.queue, Done, pageSize)
+				`, DefaultDeadLetterQueueNamePrefix+"-"+q.queue, q.queue, InProgress, c.queueMaxDeliveries, c.vacuumCurrentPageSize)
 			if err != nil {
-				return fmt.Errorf("cannot store message: %w", err)
+				return fmt.Errorf("cannot move messaged to dead letter queue: %w", err)
 			}
-			stats.Done, err = res.RowsAffected()
+			stats.Dead, err = res.RowsAffected()
 			if err != nil {
-				return fmt.Errorf("cannot calculate how many done messages were deleted: %w", err)
+				return fmt.Errorf("cannot calculate how many messages were moved to the dead letter queue: %w", err)
 			}
-			if q.maxDeliveries > 0 {
-				res, err = tx.Exec(`
-					UPDATE
-						`+pq.QuoteIdentifier(q.client.tableName)+`
-					SET
-						queue = $1
-					WHERE
-						id IN (
-							SELECT
-								id
-							FROM
-								`+pq.QuoteIdentifier(q.client.tableName)+`
-							WHERE
-								queue = $2
-								AND state = $3
-								AND deliveries > $4
-								AND leased_until < NOW()
-							LIMIT CASE WHEN $5 < 0 THEN 0 ELSE $5 END
-						)
-					`, DefaultDeadLetterQueueNamePrefix+"-"+q.queue, q.queue, InProgress, q.maxDeliveries, pageSize)
-				if err != nil {
-					return fmt.Errorf("cannot move messaged to dead letter queue: %w", err)
-				}
-				stats.Dead, err = res.RowsAffected()
-				if err != nil {
-					return fmt.Errorf("cannot calculate how many messages were moved to the dead letter queue: %w", err)
-				}
-				res, err = tx.Exec(`
-					UPDATE
-						`+pq.QuoteIdentifier(q.client.tableName)+`
-					SET
-						state = $1
-					WHERE
-						id IN (
-							SELECT
-								id
-							FROM
-								`+pq.QuoteIdentifier(q.client.tableName)+`
-							WHERE
-								queue = $2
-								AND state = $3
-								AND deliveries <= $4
-								AND leased_until < NOW()
-							LIMIT CASE WHEN $5 < 0 THEN 0 ELSE $5 END
-						)
-					`, New, q.queue, InProgress, q.maxDeliveries, pageSize)
-				if err != nil {
-					return fmt.Errorf("cannot recover messages: %w", err)
-				}
-				stats.Recovered, err = res.RowsAffected()
-				if err != nil {
-					return fmt.Errorf("cannot calculate how many messages were recovered: %w", err)
-				}
+			res, err = tx.Exec(`
+				UPDATE
+					`+pq.QuoteIdentifier(c.tableName)+`
+				SET
+					state = $1
+				WHERE
+					id IN (
+						SELECT
+							id
+						FROM
+							`+pq.QuoteIdentifier(c.tableName)+`
+						WHERE
+							queue = $2
+							AND state = $3
+							AND deliveries <= $4
+							AND leased_until < NOW()
+						LIMIT CASE WHEN $5 < 0 THEN 0 ELSE $5 END
+					)
+				`, New, q.queue, InProgress, c.queueMaxDeliveries, c.vacuumCurrentPageSize)
+			if err != nil {
+				return fmt.Errorf("cannot recover messages: %w", err)
 			}
-			return nil
-		})
-		duration, _ := big.NewFloat(time.Since(start).Seconds()).Rat(nil)
-		acc := q.vacuumPID.Accumulate(duration, vacuumPIDControllerFakeCycle)
-		pageSizeBigInt, _ := big.NewFloat(0).SetRat(acc).Int(nil)
-		q.vacuumCurrentPageSize += pageSizeBigInt.Int64()
-		return stats, err
+			stats.Recovered, err = res.RowsAffected()
+			if err != nil {
+				return fmt.Errorf("cannot calculate how many messages were recovered: %w", err)
+			}
+		}
+		return nil
 	})
-	stats := v.(VacuumStats)
-	stats.Err = err
-	return stats
+	return stats, err
+}
+
+// Queue holds the configuration definition for one queue.
+type Queue struct {
+	client *Client
+
+	queue     string
+	closeOnce sync.Once
+	closed    chan struct{}
+}
+
+// Watch observes new messages for the target queue.
+func (q *Queue) Watch(lease time.Duration) *Watcher {
+	w := &Watcher{
+		queue:         q,
+		notifications: make(chan struct{}, 1),
+		lease:         lease,
+	}
+	q.client.subscribe(w.notifications, q.queue)
+	return w
 }
 
 // Reserve retrieves the pending message from the queue, if any available. It
@@ -590,14 +641,9 @@ func (q *Queue) Pop() ([]byte, error) {
 func (q *Queue) Close() error {
 	err := ErrAlreadyClosed
 	q.closeOnce.Do(func() {
-		if q.vacuumTicker != nil {
-			q.vacuumTicker.Stop()
-		}
 		close(q.closed)
 		err = nil
-		q.muStats.Lock()
-		q.vacuumStats.Err = ErrAlreadyClosed
-		q.muStats.Unlock()
+		q.client.remove(q)
 	})
 	return err
 }
@@ -608,25 +654,6 @@ func (q *Queue) isClosed() bool {
 		return true
 	default:
 		return false
-	}
-}
-
-func (q *Queue) runAutoVacuum() {
-	for {
-
-		select {
-		case <-q.closed:
-			return
-		case <-q.vacuumTicker.C:
-			stats := q.Vacuum()
-			q.muStats.Lock()
-			q.vacuumStats.PageSize = stats.PageSize
-			q.vacuumStats.Done += stats.Done
-			q.vacuumStats.Recovered += stats.Recovered
-			q.vacuumStats.Dead += stats.Dead
-			q.vacuumStats.Err = stats.Err
-			q.muStats.Unlock()
-		}
 	}
 }
 

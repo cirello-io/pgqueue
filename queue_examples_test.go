@@ -192,7 +192,7 @@ func Example_reservedTouch() {
 
 func Example_vacuum() {
 	const reservationTime = 500 * time.Millisecond
-	client, err := pgqueue.Open(dsn)
+	client, err := pgqueue.Open(dsn, pgqueue.WithMaxDeliveries(1), pgqueue.DisableAutoVacuum())
 	if err != nil {
 		log.Fatalln("cannot open database connection:", err)
 	}
@@ -200,11 +200,7 @@ func Example_vacuum() {
 	if err := client.CreateTable(); err != nil {
 		log.Fatalln("cannot create queue table:", err)
 	}
-	queue := client.Queue(
-		"example-queue-vacuum",
-		pgqueue.WithMaxDeliveries(1),
-		pgqueue.DisableAutoVacuum(),
-	)
+	queue := client.Queue("example-queue-vacuum")
 	defer queue.Close()
 	for i := 0; i < 10; i++ {
 		content := []byte("content")
@@ -215,7 +211,7 @@ func Example_vacuum() {
 			log.Fatalln("cannot pop message from the queue:", err)
 		}
 	}
-	stats := queue.Vacuum()
+	stats := client.Vacuum()
 	if stats.Err != nil {
 		log.Fatalln("cannot clean up queue:", err)
 	}
@@ -234,11 +230,11 @@ func Example_vacuum() {
 		}
 	}
 	time.Sleep(2 * reservationTime)
-	stats = queue.Vacuum()
+	stats = client.Vacuum()
 	if stats.Err != nil {
 		log.Fatalln("cannot clean up queue:", err)
 	}
-	fmt.Println("second clean up: recove messages that timed out")
+	fmt.Println("second clean up: recover messages that timed out")
 	fmt.Println("- done message count:", stats.Done)
 	fmt.Println("- recovered message count:", stats.Recovered)
 	fmt.Println("- dead message count:", stats.Dead)
@@ -250,7 +246,7 @@ func Example_vacuum() {
 		}
 	}
 	time.Sleep(2 * reservationTime)
-	stats = queue.Vacuum()
+	stats = client.Vacuum()
 	if stats.Err != nil {
 		log.Fatalln("cannot clean up queue:", err)
 	}
@@ -264,7 +260,7 @@ func Example_vacuum() {
 	// - done message count: 10
 	// - recovered message count: 0
 	// - dead message count: 0
-	// second clean up: recove messages that timed out
+	// second clean up: recover messages that timed out
 	// - done message count: 0
 	// - recovered message count: 10
 	// - dead message count: 0

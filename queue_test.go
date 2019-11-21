@@ -16,7 +16,6 @@ package pgqueue
 import (
 	"bytes"
 	"errors"
-	"math/big"
 	"os"
 	"strings"
 	"sync"
@@ -32,7 +31,7 @@ var dsn = os.Getenv("PGQUEUE_TEST_DSN")
 func TestOverload(t *testing.T) {
 	t.Run("popPush", func(t *testing.T) {
 		t.Parallel()
-		client, err := Open(dsn, WithCustomTable("overloadpoppush"))
+		client, err := Open(dsn, WithCustomTable("overloadpoppush"), DisableAutoVacuum())
 		if err != nil {
 			t.Fatal("cannot open database connection:", err)
 		}
@@ -40,10 +39,10 @@ func TestOverload(t *testing.T) {
 		if err := client.CreateTable(); err != nil {
 			t.Fatal("cannot create queue table:", err)
 		}
-		queue := client.Queue("queue-overload-pop-push", DisableAutoVacuum())
+		queue := client.Queue("queue-overload-pop-push")
 		defer queue.Close()
 		t.Log("vacuuming the queue")
-		if stats := queue.Vacuum(); stats.Err != nil {
+		if stats := client.Vacuum(); stats.Err != nil {
 			t.Fatal("cannot clean up queue before overload test:", stats.Err)
 		}
 		t.Log("zeroing the queue")
@@ -94,7 +93,7 @@ func TestOverload(t *testing.T) {
 	})
 	t.Run("popReserveDone", func(t *testing.T) {
 		t.Parallel()
-		client, err := Open(dsn, WithCustomTable("overloadpopreservedone"))
+		client, err := Open(dsn, WithCustomTable("overloadpopreservedone"), DisableAutoVacuum())
 		if err != nil {
 			t.Fatal("cannot open database connection:", err)
 		}
@@ -102,10 +101,10 @@ func TestOverload(t *testing.T) {
 		if err := client.CreateTable(); err != nil {
 			t.Fatal("cannot create queue table:", err)
 		}
-		queue := client.Queue("queue-overload-pop-reserve-done", DisableAutoVacuum())
+		queue := client.Queue("queue-overload-pop-reserve-done")
 		defer queue.Close()
 		t.Log("vacuuming the queue")
-		if stats := queue.Vacuum(); stats.Err != nil {
+		if stats := client.Vacuum(); stats.Err != nil {
 			t.Fatal("cannot clean up queue before overload test:", stats.Err)
 		}
 		t.Log("zeroing the queue")
@@ -165,7 +164,10 @@ func (w *badWriter) Write([]byte) (int, error) {
 
 func TestDeadletterDump(t *testing.T) {
 	const reservationTime = 500 * time.Millisecond
-	client, err := Open(dsn)
+	client, err := Open(dsn,
+		WithMaxDeliveries(1),
+		DisableAutoVacuum(),
+	)
 	if err != nil {
 		t.Fatal("cannot open database connection:", err)
 	}
@@ -174,11 +176,7 @@ func TestDeadletterDump(t *testing.T) {
 		t.Fatal("cannot create queue table:", err)
 	}
 	t.Run("good dump", func(t *testing.T) {
-		queue := client.Queue(
-			"example-deadletter-queue",
-			WithMaxDeliveries(1),
-			DisableAutoVacuum(),
-		)
+		queue := client.Queue("example-deadletter-queue")
 		defer queue.Close()
 		content := []byte("the message")
 		if err := queue.Push(content); err != nil {
@@ -188,14 +186,14 @@ func TestDeadletterDump(t *testing.T) {
 			t.Fatal("cannot reserve message from the queue (try):", err)
 		}
 		time.Sleep(2 * reservationTime)
-		if stats := queue.Vacuum(); stats.Err != nil {
+		if stats := client.Vacuum(); stats.Err != nil {
 			t.Fatal("cannot clean up queue:", err)
 		}
 		if _, err := queue.Reserve(reservationTime); err != nil {
 			t.Fatal("cannot reserve message from the queue (retry):", err)
 		}
 		time.Sleep(2 * reservationTime)
-		if stats := queue.Vacuum(); stats.Err != nil {
+		if stats := client.Vacuum(); stats.Err != nil {
 			t.Fatal("cannot clean up queue:", err)
 		}
 
@@ -209,11 +207,7 @@ func TestDeadletterDump(t *testing.T) {
 		}
 	})
 	t.Run("bad io.Writer", func(t *testing.T) {
-		queue := client.Queue(
-			"example-deadletter-queue-bad-writer",
-			WithMaxDeliveries(1),
-			DisableAutoVacuum(),
-		)
+		queue := client.Queue("example-deadletter-queue-bad-writer")
 		defer queue.Close()
 		content := []byte("the message")
 		if err := queue.Push(content); err != nil {
@@ -223,14 +217,14 @@ func TestDeadletterDump(t *testing.T) {
 			t.Fatal("cannot reserve message from the queue (try):", err)
 		}
 		time.Sleep(2 * reservationTime)
-		if stats := queue.Vacuum(); stats.Err != nil {
+		if stats := client.Vacuum(); stats.Err != nil {
 			t.Fatal("cannot clean up queue:", err)
 		}
 		if _, err := queue.Reserve(reservationTime); err != nil {
 			t.Fatal("cannot reserve message from the queue (retry):", err)
 		}
 		time.Sleep(2 * reservationTime)
-		if stats := queue.Vacuum(); stats.Err != nil {
+		if stats := client.Vacuum(); stats.Err != nil {
 			t.Fatal("cannot clean up queue:", err)
 		}
 		err := client.DumpDeadLetterQueue("example-deadletter-queue-bad-writer", &badWriter{})
@@ -317,12 +311,6 @@ func TestClosedQueue(t *testing.T) {
 	defer client.Close()
 	q := client.Queue("closed-client-queue")
 	q.Close()
-	if stats := q.VacuumStats(); stats.Err != ErrAlreadyClosed {
-		t.Error("auto-vacuum VacuumStats.Err on closed queue must error with ErrAlreadyClosed:", stats.Err)
-	}
-	if stats := q.Vacuum(); stats.Err != ErrAlreadyClosed {
-		t.Error("vacuum VacuumStats.Err on closed queue must error with ErrAlreadyClosed:", stats.Err)
-	}
 	if err := q.Push(nil); err != ErrAlreadyClosed {
 		t.Error("push on closed queue must fail with ErrAlreadyClose:", err)
 	}
@@ -339,22 +327,18 @@ func TestClosedQueue(t *testing.T) {
 	if err := w.Err(); err != ErrAlreadyClosed {
 		t.Error("Watcher.Err() on closed queue must error with ErrAlreadyClosed:", err)
 	}
-	if stats := q.VacuumStats(); stats.Err != ErrAlreadyClosed {
-		t.Error("VacuumStats.Err on closed queue must error with ErrAlreadyClosed:", stats.Err)
-	}
-
 	if err := q.Close(); err != ErrAlreadyClosed {
 		t.Error("close on closed queue must error with ErrAlreadyClosed:", err)
 	}
 }
 
 func TestValidationErrors(t *testing.T) {
-	client, err := Open(dsn)
+	client, err := Open(dsn, DisableAutoVacuum())
 	if err != nil {
 		t.Fatal("cannot open database connection:", err)
 	}
 	defer client.Close()
-	q := client.Queue("closed-client-queue", DisableAutoVacuum())
+	q := client.Queue("closed-client-queue")
 	defer q.Close()
 	if err := q.Push(bytes.Repeat([]byte("A"), MaxMessageLength+1)); err != ErrMessageTooLarge {
 		t.Error("expected ErrMessageTooLarge:", err)
@@ -369,13 +353,13 @@ func TestValidationErrors(t *testing.T) {
 }
 
 func TestWatchNextErrors(t *testing.T) {
-	client, err := Open(dsn)
+	client, err := Open(dsn, DisableAutoVacuum())
 	if err != nil {
 		t.Fatal("cannot open database connection:", err)
 	}
 	defer client.Close()
 	t.Run("close while next", func(t *testing.T) {
-		q := client.Queue("close while next", DisableAutoVacuum())
+		q := client.Queue("close while next")
 		w := q.Watch(1 * time.Second)
 		go func() {
 			time.Sleep(1 * time.Second)
@@ -392,7 +376,7 @@ func TestWatchNextErrors(t *testing.T) {
 		}
 	})
 	t.Run("next after close", func(t *testing.T) {
-		q := client.Queue("next after close", DisableAutoVacuum())
+		q := client.Queue("next after close")
 		w := q.Watch(1 * time.Second)
 		q.Close()
 		if w.Next() {
@@ -410,7 +394,7 @@ func TestWatchNextErrors(t *testing.T) {
 func TestCrossQueueBump(t *testing.T) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
-	client, err := Open(dsn)
+	client, err := Open(dsn, DisableAutoVacuum())
 	if err != nil {
 		t.Fatal("cannot open database connection:", err)
 	}
@@ -418,9 +402,9 @@ func TestCrossQueueBump(t *testing.T) {
 	if err := client.CreateTable(); err != nil {
 		t.Fatal("cannot create queue table:", err)
 	}
-	qAlpha := client.Queue("cross-queue-bump-alpha", DisableAutoVacuum())
+	qAlpha := client.Queue("cross-queue-bump-alpha")
 	defer qAlpha.Close()
-	qBravo := client.Queue("cross-queue-bump-bravo", DisableAutoVacuum())
+	qBravo := client.Queue("cross-queue-bump-bravo")
 	defer qBravo.Close()
 	watchAlpha := qAlpha.Watch(time.Minute)
 	alphaGotMessage := make(chan bool, 1)
@@ -460,7 +444,7 @@ func TestCrossQueueBump(t *testing.T) {
 func TestSaturatedNotifications(t *testing.T) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
-	client, err := Open(dsn)
+	client, err := Open(dsn, DisableAutoVacuum())
 	if err != nil {
 		t.Fatal("cannot open database connection:", err)
 	}
@@ -468,7 +452,7 @@ func TestSaturatedNotifications(t *testing.T) {
 	if err := client.CreateTable(); err != nil {
 		t.Fatal("cannot create queue table:", err)
 	}
-	q := client.Queue("saturated-notifications", DisableAutoVacuum())
+	q := client.Queue("saturated-notifications")
 	defer q.Close()
 	// force Client.forwardNotifications to start dropping messages.
 	w := q.Watch(time.Minute)
@@ -494,18 +478,5 @@ func TestSaturatedNotifications(t *testing.T) {
 	q.Close()
 	if <-next {
 		t.Error("next should have been false after close")
-	}
-}
-
-func TestExposePID(t *testing.T) {
-	controller := vacuumPIDController()
-	pageSize := int64(1000)
-	t.Log(0, 0, pageSize)
-	for i := 100 * time.Millisecond; i < 2*time.Second; i += 100 * time.Millisecond {
-		duration, _ := big.NewFloat(i.Seconds()).Rat(nil)
-		acc := controller.Accumulate(duration, vacuumPIDControllerFakeCycle)
-		pageSizeBigInt, _ := big.NewFloat(0).SetRat(acc).Int(nil)
-		pageSize += pageSizeBigInt.Int64()
-		t.Log(i.Seconds(), pageSizeBigInt.Int64(), pageSize)
 	}
 }
