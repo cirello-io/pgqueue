@@ -183,7 +183,6 @@ func (c *Client) runAutoVacuum() {
 		case <-c.closed:
 			return
 		case <-c.vacuumTicker.C:
-			fmt.Println("running")
 			stats := c.Vacuum()
 			c.muVacuumStats.Lock()
 			c.vacuumStats.PageSize = stats.PageSize
