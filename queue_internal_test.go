@@ -14,8 +14,11 @@
 package pgqueue
 
 import (
+	"errors"
 	"testing"
 	"time"
+
+	"github.com/DATA-DOG/go-sqlmock"
 )
 
 func Test_validDuration(t *testing.T) {
@@ -37,4 +40,30 @@ func Test_validDuration(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDBErrorHandling(t *testing.T) {
+	setup := func() (*Client, sqlmock.Sqlmock) {
+		client, err := Open(dsn)
+		if err != nil {
+			t.Fatal("cannot open database connection:", err)
+		}
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatal("cannot create mock:", err)
+		}
+		client.db = db
+		return client, mock
+	}
+	t.Run("bad close", func(t *testing.T) {
+		client, mock := setup()
+		badClose := errors.New("cannot close")
+		mock.ExpectClose().WillReturnError(badClose)
+		if err := client.Close(); !errors.Is(err, badClose) {
+			t.Errorf("expected closer error missing: %v", err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet expectation error: %s", err)
+		}
+	})
 }

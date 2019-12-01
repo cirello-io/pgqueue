@@ -255,6 +255,12 @@ type ClientCloseError struct {
 	DriverError   error
 }
 
+// Is detects if the given target matches either the listener or the driver
+// error.
+func (e *ClientCloseError) Is(target error) bool {
+	return errors.Is(e.ListenerError, target) || errors.Is(e.DriverError, target)
+}
+
 func (e *ClientCloseError) Error() string {
 	return fmt.Sprintf("listener: %v | driver: %v", e.ListenerError, e.DriverError)
 }
