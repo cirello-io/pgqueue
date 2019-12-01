@@ -211,7 +211,8 @@ func Example_vacuum() {
 			log.Fatalln("cannot pop message from the queue:", err)
 		}
 	}
-	stats := client.Vacuum()
+	client.Vacuum()
+	stats := queue.VacuumStats()
 	if stats.Err != nil {
 		log.Fatalln("cannot clean up queue:", err)
 	}
@@ -230,7 +231,8 @@ func Example_vacuum() {
 		}
 	}
 	time.Sleep(2 * reservationTime)
-	stats = client.Vacuum()
+	client.Vacuum()
+	stats = queue.VacuumStats()
 	if stats.Err != nil {
 		log.Fatalln("cannot clean up queue:", err)
 	}
@@ -246,7 +248,8 @@ func Example_vacuum() {
 		}
 	}
 	time.Sleep(2 * reservationTime)
-	stats = client.Vacuum()
+	client.Vacuum()
+	stats = queue.VacuumStats()
 	if stats.Err != nil {
 		log.Fatalln("cannot clean up queue:", err)
 	}

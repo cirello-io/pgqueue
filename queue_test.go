@@ -42,9 +42,7 @@ func TestOverload(t *testing.T) {
 		queue := client.Queue("queue-overload-pop-push")
 		defer queue.Close()
 		t.Log("vacuuming the queue")
-		if stats := client.Vacuum(); stats.Err != nil {
-			t.Fatal("cannot clean up queue before overload test:", stats.Err)
-		}
+		client.Vacuum()
 		t.Log("zeroing the queue")
 		for {
 			if _, err := queue.Pop(); err == ErrEmptyQueue {
@@ -104,9 +102,7 @@ func TestOverload(t *testing.T) {
 		queue := client.Queue("queue-overload-pop-reserve-done")
 		defer queue.Close()
 		t.Log("vacuuming the queue")
-		if stats := client.Vacuum(); stats.Err != nil {
-			t.Fatal("cannot clean up queue before overload test:", stats.Err)
-		}
+		client.Vacuum()
 		t.Log("zeroing the queue")
 		for {
 			if _, err := queue.Pop(); err == ErrEmptyQueue {
@@ -186,16 +182,12 @@ func TestDeadletterDump(t *testing.T) {
 			t.Fatal("cannot reserve message from the queue (try):", err)
 		}
 		time.Sleep(2 * reservationTime)
-		if stats := client.Vacuum(); stats.Err != nil {
-			t.Fatal("cannot clean up queue:", err)
-		}
+		client.Vacuum()
 		if _, err := queue.Reserve(reservationTime); err != nil {
 			t.Fatal("cannot reserve message from the queue (retry):", err)
 		}
 		time.Sleep(2 * reservationTime)
-		if stats := client.Vacuum(); stats.Err != nil {
-			t.Fatal("cannot clean up queue:", err)
-		}
+		client.Vacuum()
 
 		var buf bytes.Buffer
 		if err := client.DumpDeadLetterQueue("example-deadletter-queue", &buf); err != nil {
@@ -217,16 +209,12 @@ func TestDeadletterDump(t *testing.T) {
 			t.Fatal("cannot reserve message from the queue (try):", err)
 		}
 		time.Sleep(2 * reservationTime)
-		if stats := client.Vacuum(); stats.Err != nil {
-			t.Fatal("cannot clean up queue:", err)
-		}
+		client.Vacuum()
 		if _, err := queue.Reserve(reservationTime); err != nil {
 			t.Fatal("cannot reserve message from the queue (retry):", err)
 		}
 		time.Sleep(2 * reservationTime)
-		if stats := client.Vacuum(); stats.Err != nil {
-			t.Fatal("cannot clean up queue:", err)
-		}
+		client.Vacuum()
 		err := client.DumpDeadLetterQueue("example-deadletter-queue-bad-writer", &badWriter{})
 		if err == nil {
 			t.Fatal("expected error not found")

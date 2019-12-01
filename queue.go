@@ -97,9 +97,6 @@ type Client struct {
 	vacuumSingleflight    singleflight.Group
 	vacuumPID             pidctl.Controller
 	vacuumCurrentPageSize int64
-
-	muVacuumStats sync.RWMutex
-	vacuumStats   VacuumStats
 }
 
 // ClientOption reconfigures the behavior of the pgqueue Client.
@@ -183,23 +180,9 @@ func (c *Client) runAutoVacuum() {
 		case <-c.closed:
 			return
 		case <-c.vacuumTicker.C:
-			stats := c.Vacuum()
-			c.muVacuumStats.Lock()
-			c.vacuumStats.PageSize = stats.PageSize
-			c.vacuumStats.Done += stats.Done
-			c.vacuumStats.Recovered += stats.Recovered
-			c.vacuumStats.Dead += stats.Dead
-			c.vacuumStats.Err = stats.Err
-			c.muVacuumStats.Unlock()
+			c.Vacuum()
 		}
 	}
-}
-
-// VacuumStats reports the result of the last vacuum cycle.
-func (c *Client) VacuumStats() VacuumStats {
-	c.muVacuumStats.RLock()
-	defer c.muVacuumStats.RUnlock()
-	return c.vacuumStats
 }
 
 func (c *Client) add(q *Queue) {
@@ -396,36 +379,30 @@ type VacuumStats struct {
 }
 
 // Vacuum cleans up the queue from done or dead messages.
-func (c *Client) Vacuum() VacuumStats {
-	v, err, _ := c.vacuumSingleflight.Do("vacuum", func() (interface{}, error) {
-		var stats VacuumStats
-		stats.PageSize = c.vacuumCurrentPageSize
+func (c *Client) Vacuum() {
+	c.vacuumSingleflight.Do("vacuum", func() (interface{}, error) {
 		start := time.Now()
 		for _, q := range c.knownQueues {
-			s, err := c.vacuum(q)
-			stats.Done += s.Done
-			stats.Recovered += s.Recovered
-			stats.Dead += s.Dead
-			if stats.Err == nil && err != nil {
-				stats.Err = fmt.Errorf("vacuum error for %s: %w", q.queue, err)
-			}
+			s := c.vacuum(q)
+			q.vacuumStatsMu.Lock()
+			q.vacuumStats = s
+			q.vacuumStats.PageSize = c.vacuumCurrentPageSize
+			q.vacuumStatsMu.Unlock()
 		}
 		duration, _ := big.NewFloat(time.Since(start).Seconds()).Rat(nil)
 		acc := c.vacuumPID.Accumulate(duration, vacuumPIDControllerFakeCycle)
 		pageSizeBigInt, _ := big.NewFloat(0).SetRat(acc).Int(nil)
 		c.vacuumCurrentPageSize += pageSizeBigInt.Int64()
-		return stats, stats.Err
+		return nil, nil
 	})
-	stats := v.(VacuumStats)
-	stats.Err = err
-	return stats
 }
 
-func (c *Client) vacuum(q *Queue) (stats VacuumStats, err error) {
+func (c *Client) vacuum(q *Queue) (stats VacuumStats) {
 	if q.isClosed() {
-		return stats, ErrAlreadyClosed
+		stats.Err = ErrAlreadyClosed
+		return stats
 	}
-	err = c.retry(func(tx *sql.Tx) (err error) {
+	err := c.retry(func(tx *sql.Tx) (err error) {
 		stats = VacuumStats{}
 		res, err := tx.Exec(`
 			DELETE FROM
@@ -505,7 +482,10 @@ func (c *Client) vacuum(q *Queue) (stats VacuumStats, err error) {
 		}
 		return nil
 	})
-	return stats, err
+	if stats.Err == nil && err != nil {
+		stats.Err = err
+	}
+	return stats
 }
 
 // Queue holds the configuration definition for one queue.
@@ -515,6 +495,16 @@ type Queue struct {
 	queue     string
 	closeOnce sync.Once
 	closed    chan struct{}
+
+	vacuumStatsMu sync.RWMutex
+	vacuumStats   VacuumStats
+}
+
+// VacuumStats reports the result of the last vacuum cycle.
+func (q *Queue) VacuumStats() VacuumStats {
+	q.vacuumStatsMu.RLock()
+	defer q.vacuumStatsMu.RUnlock()
+	return q.vacuumStats
 }
 
 // Watch observes new messages for the target queue.
