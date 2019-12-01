@@ -59,9 +59,11 @@ func TestDBErrorHandling(t *testing.T) {
 		client, mock := setup()
 		badClose := errors.New("cannot close")
 		mock.ExpectClose().WillReturnError(badClose)
-		if err := client.Close(); !errors.Is(err, badClose) {
+		err := client.Close()
+		if !errors.Is(err, badClose) {
 			t.Errorf("expected closer error missing: %v", err)
 		}
+		t.Log("got:", err)
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Errorf("unmet expectation error: %s", err)
 		}
