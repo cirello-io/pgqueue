@@ -468,3 +468,30 @@ func TestSaturatedNotifications(t *testing.T) {
 		t.Error("next should have been false after close")
 	}
 }
+
+func TestAutoVacuum(t *testing.T) {
+	client, err := Open(dsn,
+		WithMaxDeliveries(1),
+		WithCustomTable("queue-autovacuum"),
+	)
+	if err != nil {
+		t.Fatal("cannot open database connection:", err)
+	}
+	defer client.Close()
+	if err := client.CreateTable(); err != nil {
+		t.Fatal("cannot create queue table:", err)
+	}
+	q := client.Queue("queue")
+	defer q.Close()
+	if err := q.Push(nil); err != nil {
+		t.Fatal("cannot push message:", err)
+	}
+	if _, err := q.Pop(); err != nil {
+		t.Fatal("cannot pop message:", err)
+	}
+	time.Sleep(defaultVacuumFrequency)
+	stats := q.VacuumStats()
+	if stats.Done != 1 || stats.LastRun.IsZero() {
+		t.Fatalf("vacuum cycle may not have been run: %#v", stats)
+	}
+}

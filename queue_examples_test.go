@@ -213,7 +213,7 @@ func Example_vacuum() {
 	}
 	client.Vacuum()
 	stats := queue.VacuumStats()
-	if stats.Err != nil {
+	if err := stats.LastErr; err != nil {
 		log.Fatalln("cannot clean up queue:", err)
 	}
 	fmt.Println("first clean up: get rid of the done messages")
@@ -233,7 +233,7 @@ func Example_vacuum() {
 	time.Sleep(2 * reservationTime)
 	client.Vacuum()
 	stats = queue.VacuumStats()
-	if stats.Err != nil {
+	if err := stats.LastErr; err != nil {
 		log.Fatalln("cannot clean up queue:", err)
 	}
 	fmt.Println("second clean up: recover messages that timed out")
@@ -250,7 +250,7 @@ func Example_vacuum() {
 	time.Sleep(2 * reservationTime)
 	client.Vacuum()
 	stats = queue.VacuumStats()
-	if stats.Err != nil {
+	if err := stats.LastErr; err != nil {
 		log.Fatalln("cannot clean up queue:", err)
 	}
 	fmt.Println("third clean up: move bad messages to dead letter queue")

@@ -363,6 +363,8 @@ func (c *Client) CreateTable() error {
 
 // VacuumStats reports the consequences of the clean up.
 type VacuumStats struct {
+	// LastRun indicates the time of the lastest vacuum cycle.
+	LastRun time.Time
 	// PageSize indicates how large the vacuum operation was in order to
 	// keep it short and non-disruptive.
 	PageSize int64
@@ -374,8 +376,8 @@ type VacuumStats struct {
 	// Dead reports how many expired messages marked as InProgress but with
 	// high delivery count were moved to the deadletter queue.
 	Dead int64
-	// Err indicates why the vacuum cycle failed. If nil, it succeeded.
-	Err error
+	// LastErr indicates why the vacuum cycle failed. If nil, it succeeded.
+	LastErr error
 }
 
 // Vacuum cleans up the queue from done or dead messages.
@@ -386,6 +388,7 @@ func (c *Client) Vacuum() {
 			s := c.vacuum(q)
 			q.vacuumStatsMu.Lock()
 			q.vacuumStats = s
+			q.vacuumStats.LastRun = start
 			q.vacuumStats.PageSize = c.vacuumCurrentPageSize
 			q.vacuumStatsMu.Unlock()
 		}
@@ -399,7 +402,7 @@ func (c *Client) Vacuum() {
 
 func (c *Client) vacuum(q *Queue) (stats VacuumStats) {
 	if q.isClosed() {
-		stats.Err = ErrAlreadyClosed
+		stats.LastErr = ErrAlreadyClosed
 		return stats
 	}
 	err := c.retry(func(tx *sql.Tx) (err error) {
@@ -482,8 +485,8 @@ func (c *Client) vacuum(q *Queue) (stats VacuumStats) {
 		}
 		return nil
 	})
-	if stats.Err == nil && err != nil {
-		stats.Err = err
+	if stats.LastErr == nil && err != nil {
+		stats.LastErr = err
 	}
 	return stats
 }
