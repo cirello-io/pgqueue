@@ -405,10 +405,6 @@ func (c *Client) Vacuum() {
 }
 
 func (c *Client) vacuum(q *Queue) (stats VacuumStats) {
-	if q.isClosed() {
-		stats.LastErr = ErrAlreadyClosed
-		return stats
-	}
 	err := c.retry(func(tx *sql.Tx) (err error) {
 		stats = VacuumStats{}
 		res, err := tx.Exec(`
