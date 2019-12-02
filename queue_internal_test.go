@@ -15,6 +15,7 @@ package pgqueue
 
 import (
 	"errors"
+	"io/ioutil"
 	"testing"
 	"time"
 
@@ -106,6 +107,44 @@ func TestDBErrorHandling(t *testing.T) {
 			defer q.Close()
 			if err := q.Push(nil); !errors.Is(err, badExec) {
 				t.Errorf("expected error not found: %s", err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Errorf("unmet expectation error: %s", err)
+			}
+		})
+	})
+	t.Run("dump dead letter queue", func(t *testing.T) {
+		t.Run("bad query", func(t *testing.T) {
+			client, mock := setup()
+			badQuery := errors.New("cannot run query")
+			mock.ExpectQuery("SELECT id, content").WillReturnError(badQuery)
+			if err := client.DumpDeadLetterQueue("queue", ioutil.Discard); !errors.Is(err, badQuery) {
+				t.Errorf("expected error not found: %s", err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Errorf("unmet expectation error: %s", err)
+			}
+		})
+		t.Run("bad scan", func(t *testing.T) {
+			client, mock := setup()
+			mock.ExpectQuery("SELECT id, content").
+				WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(0)).
+				RowsWillBeClosed()
+			if err := client.DumpDeadLetterQueue("queue", ioutil.Discard); err == nil {
+				t.Errorf("expected error not found: %v", err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Errorf("unmet expectation error: %s", err)
+			}
+		})
+		t.Run("bad exec", func(t *testing.T) {
+			client, mock := setup()
+			badDelete := errors.New("cannot delete row")
+			mock.ExpectQuery("SELECT id, content").
+				WillReturnRows(sqlmock.NewRows([]string{"id", "content"}).AddRow(0, []byte("content")))
+			mock.ExpectExec("DELETE FROM").WillReturnError(badDelete)
+			if err := client.DumpDeadLetterQueue("queue", ioutil.Discard); !errors.Is(err, badDelete) {
+				t.Errorf("expected error not found: %v", err)
 			}
 			if err := mock.ExpectationsWereMet(); err != nil {
 				t.Errorf("unmet expectation error: %s", err)
