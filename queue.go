@@ -384,7 +384,11 @@ type VacuumStats struct {
 func (c *Client) Vacuum() {
 	c.vacuumSingleflight.Do("vacuum", func() (interface{}, error) {
 		start := time.Now()
-		for _, q := range c.knownQueues {
+		c.mu.RLock()
+		knownQueues := make([]*Queue, len(c.knownQueues))
+		copy(knownQueues, c.knownQueues)
+		c.mu.RUnlock()
+		for _, q := range knownQueues {
 			s := c.vacuum(q)
 			q.vacuumStatsMu.Lock()
 			q.vacuumStats = s
