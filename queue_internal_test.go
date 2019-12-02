@@ -44,7 +44,7 @@ func Test_validDuration(t *testing.T) {
 
 func TestDBErrorHandling(t *testing.T) {
 	setup := func() (*Client, sqlmock.Sqlmock) {
-		client, err := Open(dsn)
+		client, err := Open(dsn, DisableAutoVacuum())
 		if err != nil {
 			t.Fatal("cannot open database connection:", err)
 		}
@@ -67,5 +67,49 @@ func TestDBErrorHandling(t *testing.T) {
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Errorf("unmet expectation error: %s", err)
 		}
+	})
+	t.Run("push", func(t *testing.T) {
+		t.Run("bad TX", func(t *testing.T) {
+			client, mock := setup()
+			badTx := errors.New("cannot start transaction")
+			mock.ExpectBegin().WillReturnError(badTx)
+			q := client.Queue("queue")
+			defer q.Close()
+			if err := q.Push(nil); !errors.Is(err, badTx) {
+				t.Errorf("expected error not found: %s", err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Errorf("unmet expectation error: %s", err)
+			}
+		})
+		t.Run("bad exec", func(t *testing.T) {
+			client, mock := setup()
+			badExec := errors.New("cannot insert message")
+			mock.ExpectBegin()
+			mock.ExpectExec("INSERT INTO").WillReturnError(badExec)
+			q := client.Queue("queue")
+			defer q.Close()
+			if err := q.Push(nil); !errors.Is(err, badExec) {
+				t.Errorf("expected error not found: %s", err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Errorf("unmet expectation error: %s", err)
+			}
+		})
+		t.Run("bad notify", func(t *testing.T) {
+			client, mock := setup()
+			badExec := errors.New("cannot dispatch notification")
+			mock.ExpectBegin()
+			mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(0, 0))
+			mock.ExpectExec("NOTIFY").WillReturnError(badExec)
+			q := client.Queue("queue")
+			defer q.Close()
+			if err := q.Push(nil); !errors.Is(err, badExec) {
+				t.Errorf("expected error not found: %s", err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Errorf("unmet expectation error: %s", err)
+			}
+		})
 	})
 }

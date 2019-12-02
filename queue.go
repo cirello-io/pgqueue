@@ -308,7 +308,7 @@ func (c *Client) DumpDeadLetterQueue(queue string, w io.Writer) error {
 			return fmt.Errorf("cannot delete flushed message: %w", err)
 		}
 	}
-	return nil
+	return rows.Err()
 }
 
 func (c *Client) retry(f func(*sql.Tx) error) error {
