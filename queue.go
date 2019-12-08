@@ -14,7 +14,6 @@
 package pgqueue
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -137,7 +136,6 @@ func Open(dsn string, opts ...ClientOption) (*Client, error) {
 		return nil, fmt.Errorf("cannot open database: %w", err)
 	}
 	listener := pq.NewListener(dsn, 1*time.Millisecond, 1*time.Millisecond, func(t pq.ListenerEventType, err error) {})
-
 	c := &Client{
 		tableName:     defaultTableName,
 		db:            db,
@@ -311,39 +309,9 @@ func (c *Client) DumpDeadLetterQueue(queue string, w io.Writer) error {
 	return rows.Err()
 }
 
-func (c *Client) retry(f func(*sql.Tx) error) error {
-	const serializationErrorCode = "40001"
-	var err error
-	for {
-		err = func() error {
-			tx, err := c.db.BeginTx(context.Background(), &sql.TxOptions{
-				Isolation: sql.LevelSerializable,
-			})
-			if err != nil {
-				return fmt.Errorf("cannot start transaction: %w", err)
-			}
-			defer tx.Rollback()
-			if err := f(tx); err != nil {
-				return err
-			}
-			return tx.Commit()
-		}()
-		if err == nil {
-			return nil
-		}
-		var pqErr *pq.Error
-		serializationRetry := errors.As(err, &pqErr) && pqErr.Code == serializationErrorCode
-		if !serializationRetry {
-			break
-		}
-	}
-	return err
-}
-
 // CreateTable prepares the underlying table for the queue system.
 func (c *Client) CreateTable() error {
-	return c.retry(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`
+	_, err := c.db.Exec(`
 		CREATE SEQUENCE IF NOT EXISTS ` + pq.QuoteIdentifier(c.tableName+"_rvn") + ` AS BIGINT CYCLE;
 		CREATE TABLE IF NOT EXISTS ` + pq.QuoteIdentifier(c.tableName) + ` (
 			id SERIAL PRIMARY KEY,
@@ -356,9 +324,8 @@ func (c *Client) CreateTable() error {
 		);
 		CREATE INDEX IF NOT EXISTS ` + pq.QuoteIdentifier(c.tableName+"_pop") + ` ON ` + pq.QuoteIdentifier(c.tableName) + ` (queue, state);
 		CREATE INDEX IF NOT EXISTS ` + pq.QuoteIdentifier(c.tableName+"_vacuum") + ` ON ` + pq.QuoteIdentifier(c.tableName) + ` (queue, state, deliveries, leased_until);
-		`)
-		return err
-	})
+	`)
+	return err
 }
 
 // VacuumStats reports the consequences of the clean up.
@@ -410,7 +377,7 @@ func (c *Client) vacuum(q *Queue) (stats VacuumStats) {
 					queue = $1
 					AND state = $2
 				LIMIT CASE WHEN $3 < 0 THEN 0 ELSE $3 END
-				FOR UPDATE
+				FOR UPDATE SKIP LOCKED
 			)
 	`, q.queue, Done, c.vacuumCurrentPageSize)
 	if err != nil {
@@ -424,6 +391,7 @@ func (c *Client) vacuum(q *Queue) (stats VacuumStats) {
 		UPDATE
 			`+pq.QuoteIdentifier(c.tableName)+`
 		SET
+			rvn = nextval(`+pq.QuoteLiteral(q.client.tableName+"_rvn")+`),
 			state = $1
 		WHERE
 			id IN (
@@ -437,7 +405,7 @@ func (c *Client) vacuum(q *Queue) (stats VacuumStats) {
 					AND deliveries <= $4
 					AND leased_until < NOW()
 				LIMIT CASE WHEN $5 < 0 THEN 0 ELSE $5 END
-				FOR UPDATE
+				FOR UPDATE SKIP LOCKED
 			)
 	`, New, q.queue, InProgress, c.queueMaxDeliveries, c.vacuumCurrentPageSize)
 	if err != nil {
@@ -448,6 +416,7 @@ func (c *Client) vacuum(q *Queue) (stats VacuumStats) {
 		UPDATE
 			`+pq.QuoteIdentifier(c.tableName)+`
 		SET
+			rvn = nextval(`+pq.QuoteLiteral(q.client.tableName+"_rvn")+`),
 			queue = $1
 		WHERE
 			id IN (
@@ -461,7 +430,7 @@ func (c *Client) vacuum(q *Queue) (stats VacuumStats) {
 					AND deliveries > $4
 					AND leased_until < NOW()
 				LIMIT CASE WHEN $5 < 0 THEN 0 ELSE $5 END
-				FOR UPDATE
+				FOR UPDATE SKIP LOCKED
 			)
 	`, DefaultDeadLetterQueueNamePrefix+"-"+q.queue, q.queue, InProgress, c.queueMaxDeliveries, c.vacuumCurrentPageSize)
 	if err != nil {
@@ -513,48 +482,47 @@ func (q *Queue) Reserve(lease time.Duration) (*Message, error) {
 	if err := validDuration(lease); err != nil {
 		return nil, err
 	}
-	err := q.client.retry(func(tx *sql.Tx) (err error) {
-		var (
-			id          uint64
-			content     []byte
-			leasedUntil time.Time
-		)
-		row := tx.QueryRow(`
-			UPDATE `+pq.QuoteIdentifier(q.client.tableName)+`
-			SET
-				deliveries = deliveries + 1,
-				state = $1,
-				leased_until = now() + $2::interval
-			WHERE
-				id IN (
-					SELECT
-						id
-					FROM
-						`+pq.QuoteIdentifier(q.client.tableName)+`
-					WHERE
-						queue = $3
-						AND state = $4
-					ORDER BY
-						id ASC
-					LIMIT 1
-					FOR UPDATE
-				)
-			RETURNING id, content, leased_until
-		`, InProgress, lease.String(), q.queue, New)
-		if err := row.Scan(&id, &content, &leasedUntil); err != nil && err != sql.ErrNoRows {
-			return fmt.Errorf("cannot read message: %w", err)
-		} else if err == sql.ErrNoRows {
-			return ErrEmptyQueue
-		}
-		message = &Message{
-			id:          id,
-			Content:     content,
-			LeasedUntil: leasedUntil,
-			client:      q.client,
-		}
-		return nil
-	})
-	return message, err
+
+	var (
+		id          uint64
+		content     []byte
+		leasedUntil time.Time
+	)
+	row := q.client.db.QueryRow(`
+		UPDATE `+pq.QuoteIdentifier(q.client.tableName)+`
+		SET
+			rvn = nextval(`+pq.QuoteLiteral(q.client.tableName+"_rvn")+`),
+			deliveries = deliveries + 1,
+			state = $1,
+			leased_until = now() + $2::interval
+		WHERE
+			id IN (
+				SELECT
+					id
+				FROM
+					`+pq.QuoteIdentifier(q.client.tableName)+`
+				WHERE
+					queue = $3
+					AND state = $4
+				ORDER BY
+					id ASC
+				LIMIT 1
+				FOR UPDATE SKIP LOCKED
+			)
+		RETURNING id, content, leased_until
+	`, InProgress, lease.String(), q.queue, New)
+	if err := row.Scan(&id, &content, &leasedUntil); err != nil && err != sql.ErrNoRows {
+		return message, fmt.Errorf("cannot read message: %w", err)
+	} else if err == sql.ErrNoRows {
+		return message, ErrEmptyQueue
+	}
+	message = &Message{
+		id:          id,
+		Content:     content,
+		LeasedUntil: leasedUntil,
+		client:      q.client,
+	}
+	return message, nil
 }
 
 // Push enqueues the given content to the target queue.
@@ -565,15 +533,14 @@ func (q *Queue) Push(content []byte) error {
 	if err := validMessageSize(content); err != nil {
 		return err
 	}
-	return q.client.retry(func(tx *sql.Tx) error {
-		if _, err := tx.Exec(`INSERT INTO `+pq.QuoteIdentifier(q.client.tableName)+` (queue, state, content) VALUES ($1, $2, $3)`, q.queue, New, content); err != nil {
-			return fmt.Errorf("cannot store message: %w", err)
-		}
-		if _, err := tx.Exec(`NOTIFY ` + pq.QuoteIdentifier(q.client.tableName) + `, ` + pq.QuoteLiteral(q.queue)); err != nil {
-			return fmt.Errorf("cannot send push notification: %w", err)
-		}
-		return nil
-	})
+
+	if _, err := q.client.db.Exec(`INSERT INTO `+pq.QuoteIdentifier(q.client.tableName)+` (queue, state, content) VALUES ($1, $2, $3)`, q.queue, New, content); err != nil {
+		return fmt.Errorf("cannot store message: %w", err)
+	}
+	if _, err := q.client.db.Exec(`NOTIFY ` + pq.QuoteIdentifier(q.client.tableName) + `, ` + pq.QuoteLiteral(q.queue)); err != nil {
+		return fmt.Errorf("cannot send push notification: %w", err)
+	}
+	return nil
 }
 
 // Pop retrieves the pending message from the queue, if any available. If the
@@ -582,12 +549,11 @@ func (q *Queue) Pop() ([]byte, error) {
 	if q.isClosed() {
 		return nil, ErrAlreadyClosed
 	}
-	// TODO: force TX collision nextval(` + pq.QuoteLiteral(c.tableName+"_rvn") + `),
 	var content []byte
-	err := q.client.retry(func(tx *sql.Tx) error {
-		row := tx.QueryRow(`
+	row := q.client.db.QueryRow(`
 			UPDATE `+pq.QuoteIdentifier(q.client.tableName)+`
 			SET
+				rvn = nextval(`+pq.QuoteLiteral(q.client.tableName+"_rvn")+`),
 				deliveries = deliveries + 1,
 				state = $1
 			WHERE
@@ -602,18 +568,16 @@ func (q *Queue) Pop() ([]byte, error) {
 					ORDER BY
 						id ASC
 					LIMIT 1
-					FOR UPDATE
+					FOR UPDATE SKIP LOCKED
 				)
 			RETURNING content
 		`, Done, q.queue, New)
-		if err := row.Scan(&content); err != nil && err != sql.ErrNoRows {
-			return fmt.Errorf("cannot read message: %w", err)
-		} else if err == sql.ErrNoRows {
-			return ErrEmptyQueue
-		}
-		return nil
-	})
-	return content, err
+	if err := row.Scan(&content); err != nil && err != sql.ErrNoRows {
+		return content, fmt.Errorf("cannot read message: %w", err)
+	} else if err == sql.ErrNoRows {
+		return content, ErrEmptyQueue
+	}
+	return content, nil
 }
 
 // Close closes the queue.
@@ -706,18 +670,14 @@ type Message struct {
 
 // Done mark message as done.
 func (m *Message) Done() error {
-	return m.client.retry(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`UPDATE `+pq.QuoteIdentifier(m.client.tableName)+` SET state = $1 WHERE id = $2`, Done, m.id)
-		return err
-	})
+	_, err := m.client.db.Exec(`UPDATE `+pq.QuoteIdentifier(m.client.tableName)+` SET state = $1 WHERE id = $2`, Done, m.id)
+	return err
 }
 
 // Release put the message back to the queue.
 func (m *Message) Release() error {
-	return m.client.retry(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`UPDATE `+pq.QuoteIdentifier(m.client.tableName)+` SET leased_until = null, state = $1 WHERE id = $2`, New, m.id)
-		return err
-	})
+	_, err := m.client.db.Exec(`UPDATE `+pq.QuoteIdentifier(m.client.tableName)+` SET leased_until = null, state = $1 WHERE id = $2`, New, m.id)
+	return err
 }
 
 // Touch extends the lease by the given duration. The duration must be multiples
@@ -726,10 +686,8 @@ func (m *Message) Touch(extension time.Duration) error {
 	if err := validDuration(extension); err != nil {
 		return err
 	}
-	return m.client.retry(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`UPDATE `+pq.QuoteIdentifier(m.client.tableName)+` SET leased_until = now() + $1::interval WHERE id = $2`, extension.String(), m.id)
-		return err
-	})
+	_, err := m.client.db.Exec(`UPDATE `+pq.QuoteIdentifier(m.client.tableName)+` SET leased_until = now() + $1::interval WHERE id = $2`, extension.String(), m.id)
+	return err
 }
 
 func validDuration(d time.Duration) error {
