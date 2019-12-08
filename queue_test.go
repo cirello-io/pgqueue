@@ -489,7 +489,7 @@ func TestAutoVacuum(t *testing.T) {
 	if _, err := q.Pop(); err != nil {
 		t.Fatal("cannot pop message:", err)
 	}
-	time.Sleep(defaultVacuumFrequency)
+	time.Sleep(defaultVacuumFrequency * 3 / 2)
 	stats := q.VacuumStats()
 	if stats.Err != nil || stats.LastRun.IsZero() {
 		t.Fatalf("vacuum cycle may not have been run: %#v", stats)
