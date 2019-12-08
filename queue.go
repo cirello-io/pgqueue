@@ -478,15 +478,14 @@ func (q *Queue) Reserve(lease time.Duration) (*Message, error) {
 	if q.isClosed() {
 		return nil, ErrAlreadyClosed
 	}
-	var message *Message
 	if err := validDuration(lease); err != nil {
 		return nil, err
 	}
-
 	var (
 		id          uint64
 		content     []byte
 		leasedUntil time.Time
+		rvn         int64
 	)
 	row := q.client.db.QueryRow(`
 		UPDATE `+pq.QuoteIdentifier(q.client.tableName)+`
@@ -509,20 +508,20 @@ func (q *Queue) Reserve(lease time.Duration) (*Message, error) {
 				LIMIT 1
 				FOR UPDATE SKIP LOCKED
 			)
-		RETURNING id, content, leased_until
+		RETURNING id, content, leased_until, rvn
 	`, InProgress, lease.String(), q.queue, New)
-	if err := row.Scan(&id, &content, &leasedUntil); err != nil && err != sql.ErrNoRows {
-		return message, fmt.Errorf("cannot read message: %w", err)
+	if err := row.Scan(&id, &content, &leasedUntil, &rvn); err != nil && err != sql.ErrNoRows {
+		return nil, fmt.Errorf("cannot read message: %w", err)
 	} else if err == sql.ErrNoRows {
-		return message, ErrEmptyQueue
+		return nil, ErrEmptyQueue
 	}
-	message = &Message{
+	return &Message{
 		id:          id,
 		Content:     content,
 		LeasedUntil: leasedUntil,
 		client:      q.client,
-	}
-	return message, nil
+		rvn:         rvn,
+	}, nil
 }
 
 // Push enqueues the given content to the target queue.
@@ -665,18 +664,19 @@ type Message struct {
 	id          uint64
 	Content     []byte
 	LeasedUntil time.Time
+	rvn         int64
 	client      *Client
 }
 
 // Done mark message as done.
 func (m *Message) Done() error {
-	_, err := m.client.db.Exec(`UPDATE `+pq.QuoteIdentifier(m.client.tableName)+` SET state = $1 WHERE id = $2`, Done, m.id)
+	_, err := m.client.db.Exec(`UPDATE `+pq.QuoteIdentifier(m.client.tableName)+` SET rvn = nextval(`+pq.QuoteLiteral(m.client.tableName+"_rvn")+`), state = $1 WHERE id = $2 AND rvn = $3`, Done, m.id, m.rvn)
 	return err
 }
 
 // Release put the message back to the queue.
 func (m *Message) Release() error {
-	_, err := m.client.db.Exec(`UPDATE `+pq.QuoteIdentifier(m.client.tableName)+` SET leased_until = null, state = $1 WHERE id = $2`, New, m.id)
+	_, err := m.client.db.Exec(`UPDATE `+pq.QuoteIdentifier(m.client.tableName)+` SET rvn = nextval(`+pq.QuoteLiteral(m.client.tableName+"_rvn")+`), leased_until = null, state = $1 WHERE id = $2 AND rvn = $3`, New, m.id, m.rvn)
 	return err
 }
 
@@ -686,8 +686,17 @@ func (m *Message) Touch(extension time.Duration) error {
 	if err := validDuration(extension); err != nil {
 		return err
 	}
-	_, err := m.client.db.Exec(`UPDATE `+pq.QuoteIdentifier(m.client.tableName)+` SET leased_until = now() + $1::interval WHERE id = $2`, extension.String(), m.id)
-	return err
+	row := m.client.db.QueryRow(`
+		UPDATE
+			`+pq.QuoteIdentifier(m.client.tableName)+`
+		SET
+			rvn = nextval(`+pq.QuoteLiteral(m.client.tableName+"_rvn")+`),
+			leased_until = now() + $1::interval
+		WHERE
+			id = $2 AND rvn = $3
+		RETURNING rvn
+	`, extension.String(), m.id, m.rvn)
+	return row.Scan(&m.rvn)
 }
 
 func validDuration(d time.Duration) error {
