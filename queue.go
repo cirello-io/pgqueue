@@ -368,16 +368,8 @@ type VacuumStats struct {
 	// PageSize indicates how large the vacuum operation was in order to
 	// keep it short and non-disruptive.
 	PageSize int64
-	// Done reports how many messages marked as Done were deleted.
-	Done int64
-	// Recovered reports how many expired messages marked as InProgress but
-	// with low delivery count were recovered.
-	Recovered int64
-	// Dead reports how many expired messages marked as InProgress but with
-	// high delivery count were moved to the deadletter queue.
-	Dead int64
-	// LastErr indicates why the vacuum cycle failed. If nil, it succeeded.
-	LastErr error
+	// Err indicates why the vacuum cycle failed. If nil, it succeeded.
+	Err error
 }
 
 // Vacuum cleans up the queue from done or dead messages.
@@ -405,88 +397,76 @@ func (c *Client) Vacuum() {
 }
 
 func (c *Client) vacuum(q *Queue) (stats VacuumStats) {
-	err := c.retry(func(tx *sql.Tx) (err error) {
-		stats = VacuumStats{}
-		res, err := tx.Exec(`
-			DELETE FROM
-				`+pq.QuoteIdentifier(c.tableName)+`
-			WHERE
-				id IN (
-					SELECT
-						id
-					FROM
-						`+pq.QuoteIdentifier(c.tableName)+`
-					WHERE
-						queue = $1
-						AND state = $2
-					LIMIT CASE WHEN $3 < 0 THEN 0 ELSE $3 END
-				)
-			`, q.queue, Done, c.vacuumCurrentPageSize)
-		if err != nil {
-			return fmt.Errorf("cannot store message: %w", err)
-		}
-		stats.Done, err = res.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("cannot calculate how many done messages were deleted: %w", err)
-		}
-		if c.queueMaxDeliveries > 0 {
-			res, err = tx.Exec(`
-				UPDATE
+	_, err := c.db.Exec(`
+		DELETE FROM
+			`+pq.QuoteIdentifier(c.tableName)+`
+		WHERE
+			id IN (
+				SELECT
+					id
+				FROM
 					`+pq.QuoteIdentifier(c.tableName)+`
-				SET
+				WHERE
 					queue = $1
-				WHERE
-					id IN (
-						SELECT
-							id
-						FROM
-							`+pq.QuoteIdentifier(c.tableName)+`
-						WHERE
-							queue = $2
-							AND state = $3
-							AND deliveries > $4
-							AND leased_until < NOW()
-						LIMIT CASE WHEN $5 < 0 THEN 0 ELSE $5 END
-					)
-				`, DefaultDeadLetterQueueNamePrefix+"-"+q.queue, q.queue, InProgress, c.queueMaxDeliveries, c.vacuumCurrentPageSize)
-			if err != nil {
-				return fmt.Errorf("cannot move messaged to dead letter queue: %w", err)
-			}
-			stats.Dead, err = res.RowsAffected()
-			if err != nil {
-				return fmt.Errorf("cannot calculate how many messages were moved to the dead letter queue: %w", err)
-			}
-			res, err = tx.Exec(`
-				UPDATE
+					AND state = $2
+				LIMIT CASE WHEN $3 < 0 THEN 0 ELSE $3 END
+				FOR UPDATE
+			)
+	`, q.queue, Done, c.vacuumCurrentPageSize)
+	if err != nil {
+		stats.Err = fmt.Errorf("cannot store message: %w", err)
+		return stats
+	}
+	if c.queueMaxDeliveries == 0 {
+		return stats
+	}
+	_, err = c.db.Exec(`
+		UPDATE
+			`+pq.QuoteIdentifier(c.tableName)+`
+		SET
+			state = $1
+		WHERE
+			id IN (
+				SELECT
+					id
+				FROM
 					`+pq.QuoteIdentifier(c.tableName)+`
-				SET
-					state = $1
 				WHERE
-					id IN (
-						SELECT
-							id
-						FROM
-							`+pq.QuoteIdentifier(c.tableName)+`
-						WHERE
-							queue = $2
-							AND state = $3
-							AND deliveries <= $4
-							AND leased_until < NOW()
-						LIMIT CASE WHEN $5 < 0 THEN 0 ELSE $5 END
-					)
-				`, New, q.queue, InProgress, c.queueMaxDeliveries, c.vacuumCurrentPageSize)
-			if err != nil {
-				return fmt.Errorf("cannot recover messages: %w", err)
-			}
-			stats.Recovered, err = res.RowsAffected()
-			if err != nil {
-				return fmt.Errorf("cannot calculate how many messages were recovered: %w", err)
-			}
-		}
-		return nil
-	})
-	if stats.LastErr == nil && err != nil {
-		stats.LastErr = err
+					queue = $2
+					AND state = $3
+					AND deliveries <= $4
+					AND leased_until < NOW()
+				LIMIT CASE WHEN $5 < 0 THEN 0 ELSE $5 END
+				FOR UPDATE
+			)
+	`, New, q.queue, InProgress, c.queueMaxDeliveries, c.vacuumCurrentPageSize)
+	if err != nil {
+		stats.Err = fmt.Errorf("cannot recover messages: %w", err)
+		return stats
+	}
+	_, err = c.db.Exec(`
+		UPDATE
+			`+pq.QuoteIdentifier(c.tableName)+`
+		SET
+			queue = $1
+		WHERE
+			id IN (
+				SELECT
+					id
+				FROM
+					`+pq.QuoteIdentifier(c.tableName)+`
+				WHERE
+					queue = $2
+					AND state = $3
+					AND deliveries > $4
+					AND leased_until < NOW()
+				LIMIT CASE WHEN $5 < 0 THEN 0 ELSE $5 END
+				FOR UPDATE
+			)
+	`, DefaultDeadLetterQueueNamePrefix+"-"+q.queue, q.queue, InProgress, c.queueMaxDeliveries, c.vacuumCurrentPageSize)
+	if err != nil {
+		stats.Err = fmt.Errorf("cannot move messaged to dead letter queue: %w", err)
+		return stats
 	}
 	return stats
 }
@@ -602,6 +582,7 @@ func (q *Queue) Pop() ([]byte, error) {
 	if q.isClosed() {
 		return nil, ErrAlreadyClosed
 	}
+	// TODO: force TX collision nextval(` + pq.QuoteLiteral(c.tableName+"_rvn") + `),
 	var content []byte
 	err := q.client.retry(func(tx *sql.Tx) error {
 		row := tx.QueryRow(`

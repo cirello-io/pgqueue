@@ -491,7 +491,7 @@ func TestAutoVacuum(t *testing.T) {
 	}
 	time.Sleep(defaultVacuumFrequency)
 	stats := q.VacuumStats()
-	if stats.Done != 1 || stats.LastRun.IsZero() {
+	if stats.Err != nil || stats.LastRun.IsZero() {
 		t.Fatalf("vacuum cycle may not have been run: %#v", stats)
 	}
 }

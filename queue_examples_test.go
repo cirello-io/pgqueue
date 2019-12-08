@@ -213,62 +213,7 @@ func Example_vacuum() {
 	}
 	client.Vacuum()
 	stats := queue.VacuumStats()
-	if err := stats.LastErr; err != nil {
+	if err := stats.Err; err != nil {
 		log.Fatalln("cannot clean up queue:", err)
 	}
-	fmt.Println("first clean up: get rid of the done messages")
-	fmt.Println("- done message count:", stats.Done)
-	fmt.Println("- recovered message count:", stats.Recovered)
-	fmt.Println("- dead message count:", stats.Dead)
-
-	for i := 0; i < 10; i++ {
-		content := []byte("content")
-		if err := queue.Push(content); err != nil {
-			log.Fatalln("cannot push message to queue:", err)
-		}
-		if _, err := queue.Reserve(reservationTime); err != nil {
-			log.Fatalln("cannot reserve message from the queue (first try):", err)
-		}
-	}
-	time.Sleep(2 * reservationTime)
-	client.Vacuum()
-	stats = queue.VacuumStats()
-	if err := stats.LastErr; err != nil {
-		log.Fatalln("cannot clean up queue:", err)
-	}
-	fmt.Println("second clean up: recover messages that timed out")
-	fmt.Println("- done message count:", stats.Done)
-	fmt.Println("- recovered message count:", stats.Recovered)
-	fmt.Println("- dead message count:", stats.Dead)
-
-	for i := 0; i < 10; i++ {
-		if _, err := queue.Reserve(reservationTime); err != nil {
-			fmt.Println("cannot reserve message from the queue (third try):", err)
-			return
-		}
-	}
-	time.Sleep(2 * reservationTime)
-	client.Vacuum()
-	stats = queue.VacuumStats()
-	if err := stats.LastErr; err != nil {
-		log.Fatalln("cannot clean up queue:", err)
-	}
-	fmt.Println("third clean up: move bad messages to dead letter queue")
-	fmt.Println("- done message count:", stats.Done)
-	fmt.Println("- recovered message count:", stats.Recovered)
-	fmt.Println("- dead message count:", stats.Dead)
-
-	// Output:
-	// first clean up: get rid of the done messages
-	// - done message count: 10
-	// - recovered message count: 0
-	// - dead message count: 0
-	// second clean up: recover messages that timed out
-	// - done message count: 0
-	// - recovered message count: 10
-	// - dead message count: 0
-	// third clean up: move bad messages to dead letter queue
-	// - done message count: 0
-	// - recovered message count: 0
-	// - dead message count: 10
 }
