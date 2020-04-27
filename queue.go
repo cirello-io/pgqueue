@@ -43,11 +43,11 @@ var ErrAlreadyClosed = errors.New("queue is already closed")
 // than a millisecond and be multiple of a millisecond.
 var ErrInvalidDuration = errors.New("invalid duration")
 
-// MaxMessageLength indicates the maximum content length acceptable for new
-// messages. Although it is theoretically possible to use large messages, the
-// idea here is to be conservative until the properties of PostgreSQL are fully
-// mapped.
-const MaxMessageLength = 65536
+// DefaultMaxMessageLength indicates the maximum content length acceptable for
+// new messages. Although it is theoretically possible to use large messages,
+// the idea here is to be conservative until the properties of PostgreSQL are
+// fully mapped.
+const DefaultMaxMessageLength = 65536
 
 // DefaultMaxDeliveriesCount is how many delivery attempt each message gets
 // before getting skipped on Pop and Reserve calls.
@@ -80,10 +80,11 @@ const (
 
 // Client uses a postgreSQL database to run a queue system.
 type Client struct {
-	tableName          string
-	db                 *sql.DB
-	listener           *pq.Listener
-	queueMaxDeliveries int
+	tableName             string
+	db                    *sql.DB
+	listener              *pq.Listener
+	queueMaxDeliveries    int
+	queueMaxMessageLength int
 
 	closeOnce sync.Once
 	closed    chan struct{}
@@ -116,6 +117,14 @@ func WithMaxDeliveries(maxDeliveries int) ClientOption {
 	}
 }
 
+// WithMaxMessageLength indicates how long each message can be before it is
+// considered an error. If zero, it imposes no limit
+func WithMaxMessageLength(maxMessageLength int) ClientOption {
+	return func(c *Client) {
+		c.queueMaxMessageLength = maxMessageLength
+	}
+}
+
 // DisableAutoVacuum forces the use of manual queue clean up.
 func DisableAutoVacuum() ClientOption {
 	return func(c *Client) {
@@ -142,8 +151,9 @@ func Open(dsn string, opts ...ClientOption) (*Client, error) {
 		listener:      listener,
 		subscriptions: make(map[chan struct{}]string),
 
-		vacuumTicker:       time.NewTicker(defaultVacuumFrequency),
-		queueMaxDeliveries: DefaultMaxDeliveriesCount,
+		vacuumTicker:          time.NewTicker(defaultVacuumFrequency),
+		queueMaxDeliveries:    DefaultMaxDeliveriesCount,
+		queueMaxMessageLength: DefaultMaxMessageLength,
 		vacuumPID: pidctl.Controller{
 			// each adjusment step must be +/- 500 rows
 			P:   big.NewRat(500, 1),
@@ -267,9 +277,10 @@ func (c *Client) Close() error {
 // Queue configures a queue.
 func (c *Client) Queue(queue string) *Queue {
 	q := &Queue{
-		client: c,
-		queue:  queue,
-		closed: make(chan struct{}),
+		client:           c,
+		queue:            queue,
+		closed:           make(chan struct{}),
+		maxMessageLength: c.queueMaxMessageLength,
 	}
 	c.add(q)
 	return q
@@ -450,6 +461,8 @@ type Queue struct {
 
 	vacuumStatsMu sync.RWMutex
 	vacuumStats   VacuumStats
+
+	maxMessageLength int
 }
 
 // VacuumStats reports the result of the last vacuum cycle.
@@ -529,7 +542,7 @@ func (q *Queue) Push(content []byte) error {
 	if q.isClosed() {
 		return ErrAlreadyClosed
 	}
-	if err := validMessageSize(content); err != nil {
+	if err := q.validMessageLength(content); err != nil {
 		return err
 	}
 
@@ -538,6 +551,13 @@ func (q *Queue) Push(content []byte) error {
 	}
 	if _, err := q.client.db.Exec(`NOTIFY ` + pq.QuoteIdentifier(q.client.tableName) + `, ` + pq.QuoteLiteral(q.queue)); err != nil {
 		return fmt.Errorf("cannot send push notification: %w", err)
+	}
+	return nil
+}
+
+func (q *Queue) validMessageLength(content []byte) error {
+	if q.maxMessageLength > 0 && len(content) > q.maxMessageLength {
+		return ErrMessageTooLarge
 	}
 	return nil
 }
@@ -703,13 +723,6 @@ func validDuration(d time.Duration) error {
 	valid := d > time.Millisecond && d%time.Millisecond == 0
 	if !valid {
 		return ErrInvalidDuration
-	}
-	return nil
-}
-
-func validMessageSize(content []byte) error {
-	if len(content) > MaxMessageLength {
-		return ErrMessageTooLarge
 	}
 	return nil
 }

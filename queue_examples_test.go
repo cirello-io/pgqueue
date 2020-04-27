@@ -78,7 +78,7 @@ func Example_largeMessage() {
 	}
 	queue := client.Queue("example-queue-large-message")
 	defer queue.Close()
-	content := bytes.Repeat([]byte{0}, pgqueue.MaxMessageLength+1)
+	content := bytes.Repeat([]byte{0}, pgqueue.DefaultMaxMessageLength+1)
 	err = queue.Push(content)
 	fmt.Println("err:", err)
 	// Output:

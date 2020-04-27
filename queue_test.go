@@ -328,7 +328,7 @@ func TestValidationErrors(t *testing.T) {
 	defer client.Close()
 	q := client.Queue("closed-client-queue")
 	defer q.Close()
-	if err := q.Push(bytes.Repeat([]byte("A"), MaxMessageLength+1)); err != ErrMessageTooLarge {
+	if err := q.Push(bytes.Repeat([]byte("A"), DefaultMaxMessageLength+1)); err != ErrMessageTooLarge {
 		t.Error("expected ErrMessageTooLarge:", err)
 	}
 	if _, err := q.Reserve(0); err != ErrInvalidDuration {
