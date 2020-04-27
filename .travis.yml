@@ -17,8 +17,8 @@ install: true
 
 script:
   - docker run -d --name pg12 -e POSTGRES_PASSWORD=mysecretpassword -p 5412:5432 postgres:12
-  - docker run -d --name pg96 -e POSTGRES_PASSWORD=mysecretpassword -p 5496:5432 postgres:9.6
+  # - docker run -d --name pg96 -e POSTGRES_PASSWORD=mysecretpassword -p 5496:5432 postgres:9.6
   - PGQUEUE_TEST_DSN=postgres://postgres:mysecretpassword@localhost:5412/postgres?sslmode=disable go test -v . -race
   - PGQUEUE_TEST_DSN=postgres://postgres:mysecretpassword@localhost:5412/postgres?sslmode=disable go test -v . -covermode=count -coverprofile=profile.cov
   - $GOPATH/bin/goveralls -coverprofile=profile.cov -service=travis-ci
-  - PGQUEUE_TEST_DSN=postgres://postgres:mysecretpassword@localhost:5496/postgres?sslmode=disable go test -v .
+  # - PGQUEUE_TEST_DSN=postgres://postgres:mysecretpassword@localhost:5496/postgres?sslmode=disable go test -v .
