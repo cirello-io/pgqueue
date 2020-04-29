@@ -16,6 +16,7 @@ package pgqueue
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -161,7 +162,7 @@ func (w *badWriter) Write([]byte) (int, error) {
 func TestDeadletterDump(t *testing.T) {
 	const reservationTime = 500 * time.Millisecond
 	client, err := Open(dsn,
-		WithMaxDeliveries(1),
+		WithMaxDeliveries(2),
 		DisableAutoVacuum(),
 	)
 	if err != nil {
@@ -493,5 +494,38 @@ func TestAutoVacuum(t *testing.T) {
 	stats := q.VacuumStats()
 	if stats.Err != nil || stats.LastRun.IsZero() {
 		t.Fatalf("vacuum cycle may not have been run: %#v", stats)
+	}
+}
+
+func TestDisableDeadletterQueue(t *testing.T) {
+	client, err := Open(dsn,
+		WithMaxDeliveries(1),
+		DisableAutoVacuum(),
+		DisableDeadletterQueue(),
+	)
+	if err != nil {
+		t.Fatal("cannot open database connection:", err)
+	}
+	defer client.Close()
+	if err := client.CreateTable(); err != nil {
+		t.Fatal("cannot create queue table:", err)
+	}
+	qName := fmt.Sprintf("disabled_dl_queue_%s", time.Now())
+	q := client.Queue(qName)
+	defer q.Close()
+	if err := q.Push([]byte("hello")); err != nil {
+		t.Fatal("cannot push message:", err)
+	}
+	if _, err := q.Reserve(1 * time.Second); err != nil {
+		t.Fatal("cannot reserve message:", err)
+	}
+	client.Vacuum()
+	time.Sleep(2 * time.Second)
+	if err := client.DumpDeadLetterQueue(qName, nil); !errors.Is(err, ErrDeadletterQueueDisabled) {
+		t.Fatal("expected error missing, got:", err)
+	}
+	if m, err := q.Reserve(1 * time.Second); !errors.Is(err, ErrEmptyQueue) {
+		t.Logf("m: %s", m.Content)
+		t.Fatal("queue should be empty:", err)
 	}
 }

@@ -47,6 +47,10 @@ var ErrInvalidDuration = errors.New("invalid duration")
 // current message pointer can no longer be used to update it.
 var ErrMessageExpired = errors.New("message expired")
 
+// ErrDeadletterQueueDisabled indicates that is not possible to dump messages
+// from the target deadletter queue because its support has been disabled.
+var ErrDeadletterQueueDisabled = errors.New("deadletter queue disabled")
+
 // DefaultMaxMessageLength indicates the maximum content length acceptable for
 // new messages. Although it is theoretically possible to use large messages,
 // the idea here is to be conservative until the properties of PostgreSQL are
@@ -89,6 +93,7 @@ type Client struct {
 	listener              *pq.Listener
 	queueMaxDeliveries    int
 	queueMaxMessageLength int
+	deleteOnError         bool
 
 	closeOnce sync.Once
 	closed    chan struct{}
@@ -135,6 +140,14 @@ func DisableAutoVacuum() ClientOption {
 		if c.vacuumTicker != nil {
 			c.vacuumTicker.Stop()
 		}
+	}
+}
+
+// DisableDeadletterQueue forces the errored messages to be deleted from the
+// queue.
+func DisableDeadletterQueue() ClientOption {
+	return func(c *Client) {
+		c.deleteOnError = true
 	}
 }
 
@@ -285,6 +298,7 @@ func (c *Client) Queue(queue string) *Queue {
 		queue:            queue,
 		closed:           make(chan struct{}),
 		maxMessageLength: c.queueMaxMessageLength,
+		deleteOnError:    c.deleteOnError,
 	}
 	c.add(q)
 	return q
@@ -293,6 +307,9 @@ func (c *Client) Queue(queue string) *Queue {
 // DumpDeadLetterQueue writes the messages into the writer and remove them from
 // the database.
 func (c *Client) DumpDeadLetterQueue(queue string, w io.Writer) error {
+	if c.deleteOnError {
+		return ErrDeadletterQueueDisabled
+	}
 	rows, err := c.db.Query(`
 		SELECT
 			id, content
@@ -406,7 +423,7 @@ func (c *Client) vacuum(q *Queue) (stats VacuumStats) {
 		UPDATE
 			`+pq.QuoteIdentifier(c.tableName)+`
 		SET
-			rvn = nextval(`+pq.QuoteLiteral(q.client.tableName+"_rvn")+`),
+			rvn = nextval(`+pq.QuoteLiteral(c.tableName+"_rvn")+`),
 			state = $1
 		WHERE
 			id IN (
@@ -417,7 +434,7 @@ func (c *Client) vacuum(q *Queue) (stats VacuumStats) {
 				WHERE
 					queue = $2
 					AND state = $3
-					AND deliveries <= $4
+					AND deliveries < $4
 					AND leased_until < NOW()
 				LIMIT CASE WHEN $5 < 0 THEN 0 ELSE $5 END
 				FOR UPDATE SKIP LOCKED
@@ -427,30 +444,55 @@ func (c *Client) vacuum(q *Queue) (stats VacuumStats) {
 		stats.Err = fmt.Errorf("cannot recover messages: %w", err)
 		return stats
 	}
-	_, err = c.db.Exec(`
-		UPDATE
-			`+pq.QuoteIdentifier(c.tableName)+`
-		SET
-			rvn = nextval(`+pq.QuoteLiteral(q.client.tableName+"_rvn")+`),
-			queue = $1
-		WHERE
-			id IN (
-				SELECT
-					id
-				FROM
-					`+pq.QuoteIdentifier(c.tableName)+`
-				WHERE
-					queue = $2
-					AND state = $3
-					AND deliveries > $4
-					AND leased_until < NOW()
-				LIMIT CASE WHEN $5 < 0 THEN 0 ELSE $5 END
-				FOR UPDATE SKIP LOCKED
-			)
-	`, DefaultDeadLetterQueueNamePrefix+"-"+q.queue, q.queue, InProgress, c.queueMaxDeliveries, c.vacuumCurrentPageSize)
-	if err != nil {
-		stats.Err = fmt.Errorf("cannot move messaged to dead letter queue: %w", err)
-		return stats
+	if q.deleteOnError {
+		_, err = c.db.Exec(`
+			DELETE FROM
+				`+pq.QuoteIdentifier(c.tableName)+`
+			WHERE
+				id IN (
+					SELECT
+						id
+					FROM
+						`+pq.QuoteIdentifier(c.tableName)+`
+					WHERE
+						queue = $1
+						AND state = $2
+						AND deliveries >= $3
+						AND leased_until < NOW()
+					LIMIT CASE WHEN $4 < 0 THEN 0 ELSE $4 END
+					FOR UPDATE SKIP LOCKED
+				)
+		`, q.queue, InProgress, c.queueMaxDeliveries, c.vacuumCurrentPageSize)
+		if err != nil {
+			stats.Err = fmt.Errorf("cannot delete errored message from the queue: %w", err)
+			return stats
+		}
+	} else {
+		_, err = c.db.Exec(`
+			UPDATE
+				`+pq.QuoteIdentifier(c.tableName)+`
+			SET
+				rvn = nextval(`+pq.QuoteLiteral(q.client.tableName+"_rvn")+`),
+				queue = $1
+			WHERE
+				id IN (
+					SELECT
+						id
+					FROM
+						`+pq.QuoteIdentifier(c.tableName)+`
+					WHERE
+						queue = $2
+						AND state = $3
+						AND deliveries >= $4
+						AND leased_until < NOW()
+					LIMIT CASE WHEN $5 < 0 THEN 0 ELSE $5 END
+					FOR UPDATE SKIP LOCKED
+				)
+		`, DefaultDeadLetterQueueNamePrefix+"-"+q.queue, q.queue, InProgress, c.queueMaxDeliveries, c.vacuumCurrentPageSize)
+		if err != nil {
+			stats.Err = fmt.Errorf("cannot move message to dead letter queue: %w", err)
+			return stats
+		}
 	}
 	return stats
 }
@@ -467,6 +509,7 @@ type Queue struct {
 	vacuumStats   VacuumStats
 
 	maxMessageLength int
+	deleteOnError    bool
 }
 
 // VacuumStats reports the result of the last vacuum cycle.
