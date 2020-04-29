@@ -43,6 +43,10 @@ var ErrAlreadyClosed = errors.New("queue is already closed")
 // than a millisecond and be multiple of a millisecond.
 var ErrInvalidDuration = errors.New("invalid duration")
 
+// ErrMessageExpired indicates the message deadline has been reached and the
+// current message pointer can no longer be used to update it.
+var ErrMessageExpired = errors.New("message expired")
+
 // DefaultMaxMessageLength indicates the maximum content length acceptable for
 // new messages. Although it is theoretically possible to use large messages,
 // the idea here is to be conservative until the properties of PostgreSQL are
@@ -690,14 +694,67 @@ type Message struct {
 
 // Done mark message as done.
 func (m *Message) Done() error {
-	_, err := m.client.db.Exec(`UPDATE `+pq.QuoteIdentifier(m.client.tableName)+` SET rvn = nextval(`+pq.QuoteLiteral(m.client.tableName+"_rvn")+`), state = $1 WHERE id = $2 AND rvn = $3`, Done, m.id, m.rvn)
-	return err
+	result, err := m.client.db.Exec(`
+		UPDATE
+			`+pq.QuoteIdentifier(m.client.tableName)+`
+		SET
+			rvn = nextval(`+pq.QuoteLiteral(m.client.tableName+"_rvn")+`),
+			state = $1
+		WHERE
+			id IN (
+				SELECT
+					id
+				FROM
+					`+pq.QuoteIdentifier(m.client.tableName)+`
+				WHERE
+					id = $2
+					AND rvn = $3
+					AND leased_until >= NOW()
+				FOR UPDATE NOWAIT
+			)
+		`, Done, m.id, m.rvn)
+	if err != nil {
+		return err
+	}
+	affectedRows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	} else if affectedRows == 0 {
+		return ErrMessageExpired
+	}
+	return nil
 }
 
 // Release put the message back to the queue.
 func (m *Message) Release() error {
-	_, err := m.client.db.Exec(`UPDATE `+pq.QuoteIdentifier(m.client.tableName)+` SET rvn = nextval(`+pq.QuoteLiteral(m.client.tableName+"_rvn")+`), leased_until = null, state = $1 WHERE id = $2 AND rvn = $3`, New, m.id, m.rvn)
-	return err
+	result, err := m.client.db.Exec(`
+		UPDATE
+			`+pq.QuoteIdentifier(m.client.tableName)+`
+		SET
+			rvn = nextval(`+pq.QuoteLiteral(m.client.tableName+"_rvn")+`), leased_until = null, state = $1
+		WHERE
+			id IN (
+				SELECT
+					id
+				FROM
+					`+pq.QuoteIdentifier(m.client.tableName)+`
+				WHERE
+					id = $2
+					AND rvn = $3
+					AND leased_until >= NOW()
+				FOR UPDATE NOWAIT
+			)
+		`, New, m.id, m.rvn)
+	if err != nil {
+		return err
+	}
+	affectedRows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	} else if affectedRows == 0 {
+		return ErrMessageExpired
+	}
+	return nil
 }
 
 // Touch extends the lease by the given duration. The duration must be multiples
@@ -713,10 +770,26 @@ func (m *Message) Touch(extension time.Duration) error {
 			rvn = nextval(`+pq.QuoteLiteral(m.client.tableName+"_rvn")+`),
 			leased_until = now() + $1::interval
 		WHERE
-			id = $2 AND rvn = $3
-		RETURNING rvn
+			id IN (
+				SELECT
+					id
+				FROM
+					`+pq.QuoteIdentifier(m.client.tableName)+`
+				WHERE
+					id = $2
+					AND rvn = $3
+					AND leased_until >= NOW()
+				FOR UPDATE NOWAIT
+			)
+		RETURNING rvn, leased_until
 	`, extension.String(), m.id, m.rvn)
-	return row.Scan(&m.rvn)
+	err := row.Scan(&m.rvn, &m.LeasedUntil)
+	if err == sql.ErrNoRows {
+		return ErrMessageExpired
+	} else if err != nil {
+		return err
+	}
+	return nil
 }
 
 func validDuration(d time.Duration) error {
