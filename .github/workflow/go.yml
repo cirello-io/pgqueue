@@ -1,0 +1,46 @@
+name: Go
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  schedule:
+    - cron: '0 0 * * *'
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        postgres-version: [15, 14, 13, 12, 11]
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres-version }}
+        ports:
+          - "5432:5432"
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: everyone
+          POSTGRES_DB: postgres
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Setup Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: 'stable'
+
+    - name: Test
+      run: |
+        PGQUEUE_TEST_DSN="postgres://postgres:everyone@localhost:5432/postgres?sslmode=disable" go test -coverprofile=coverage.out -shuffle on -short -v
+        go tool cover -html=coverage.out -o coverage.html
+
+    - name: Upload coverage
+      uses: actions/upload-artifact@v3
+      with:
+        name: coverage
+        path: coverage.html
