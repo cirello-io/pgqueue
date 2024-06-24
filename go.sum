@@ -8,6 +8,8 @@ cirello.io/pidctl v0.0.0-20220620084500-11e60ce22795 h1:BMOrBm/9zvK1K7CMXM0nJ789
 cirello.io/pidctl v0.0.0-20220620084500-11e60ce22795/go.mod h1:Z2ma8nptGwhEV1alsseW1d5Pvv+v3/BtwFFPs1W3j0s=
 cirello.io/pidctl v0.0.0-20231020185418-3a21d6f4639b h1:BgUGB8N1RoFTl5P+Hgeox4LFliJxRm8AqIXj8elzp70=
 cirello.io/pidctl v0.0.0-20231020185418-3a21d6f4639b/go.mod h1:Z2ma8nptGwhEV1alsseW1d5Pvv+v3/BtwFFPs1W3j0s=
+cirello.io/pidctl v1.0.0 h1:rCvjcI5SiMoB70v3MlpcJRUlDKyH0GkbS1TiBrOMQzQ=
+cirello.io/pidctl v1.0.0/go.mod h1:Z2ma8nptGwhEV1alsseW1d5Pvv+v3/BtwFFPs1W3j0s=
 github.com/DATA-DOG/go-sqlmock v1.5.0 h1:Shsta01QNfFxHCfpW6YH2STWB0MudeXXEWMr20OEh60=
 github.com/DATA-DOG/go-sqlmock v1.5.0/go.mod h1:f/Ixk793poVmq4qj/V1dPUg2JEAKC73Q5eFN3EC/SaM=
 github.com/lib/pq v1.9.0 h1:L8nSXQQzAYByakOFMTwpjRoHsMJklur4Gi59b6VivR8=
@@ -33,3 +35,5 @@ golang.org/x/sync v0.1.0 h1:wsuoTGHzEhffawBOhz5CYhcrV4IdKZbEyZjBMuTp12o=
 golang.org/x/sync v0.1.0/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
 golang.org/x/sync v0.5.0 h1:60k92dhOjHxJkrqnwsfl8KuaHbn/5dl0lUPUklKo3qE=
 golang.org/x/sync v0.5.0/go.mod h1:Czt+wKu1gCyEFDUtn0jG5QVvpJ6rzVqr5aXyt9drQfk=
+golang.org/x/sync v0.7.0 h1:YsImfSBoP9QPYL0xyKJPq0gcaJdG3rInoqxTWbfQu9M=
+golang.org/x/sync v0.7.0/go.mod h1:Czt+wKu1gCyEFDUtn0jG5QVvpJ6rzVqr5aXyt9drQfk=
