@@ -36,8 +36,8 @@ jobs:
 
     - name: Test
       run: |
-        PGQUEUE_TEST_DSN="postgres://postgres:everyone@localhost:5432/postgres?sslmode=disable" go test -coverprofile=coverage.out -shuffle on -short -v
-        go tool cover -html=coverage.out -o coverage.html -run=. -bench=.
+        PGQUEUE_TEST_DSN="postgres://postgres:everyone@localhost:5432/postgres?sslmode=disable" go test -coverprofile=coverage.out -shuffle on -v -run=. -bench=.
+        go tool cover -html=coverage.out -o coverage.html
 
     - name: Upload coverage
       uses: actions/upload-artifact@v4
