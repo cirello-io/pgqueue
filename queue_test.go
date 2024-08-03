@@ -345,6 +345,9 @@ func TestWatchNextErrors(t *testing.T) {
 		t.Fatal("cannot open database connection:", err)
 	}
 	defer client.Close()
+	if err := client.CreateTable(ctx); err != nil {
+		t.Fatal("cannot create queue table:", err)
+	}
 	t.Run("closeWhileNext", func(t *testing.T) {
 		q := client.Queue("close while next")
 		w := q.Watch(1 * time.Second)
