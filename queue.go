@@ -1,4 +1,4 @@
-// Copyright 2019 github.com/ucirello and cirello.io. All rights reserved.
+// Copyright 2024 github.com/ucirello and cirello.io. All rights reserved.
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -14,26 +14,27 @@
 package pgqueue
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math/big"
+	"slices"
 	"sync"
 	"time"
 
 	"cirello.io/pidctl"
-	"github.com/lib/pq"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/sync/singleflight"
 )
 
 // ErrEmptyQueue indicates there isn't any message available at the head of the
 // queue.
 var ErrEmptyQueue = fmt.Errorf("empty queue")
-
-// ErrMessageTooLarge indicates the content to be pushed is too large.
-var ErrMessageTooLarge = fmt.Errorf("message is too large")
 
 // ErrAlreadyClosed indicates the queue is closed and all its watchers are going
 // to report the queue is no longer available.
@@ -50,12 +51,6 @@ var ErrMessageExpired = errors.New("message expired")
 // ErrDeadletterQueueDisabled indicates that is not possible to dump messages
 // from the target deadletter queue because its support has been disabled.
 var ErrDeadletterQueueDisabled = errors.New("deadletter queue disabled")
-
-// DefaultMaxMessageLength indicates the maximum content length acceptable for
-// new messages. Although it is theoretically possible to use large messages,
-// the idea here is to be conservative until the properties of PostgreSQL are
-// fully mapped.
-const DefaultMaxMessageLength = 65536
 
 // DefaultMaxDeliveriesCount is how many delivery attempt each message gets
 // before getting skipped on Pop and Reserve calls.
@@ -88,15 +83,14 @@ const (
 
 // Client uses a postgreSQL database to run a queue system.
 type Client struct {
-	tableName             string
-	db                    *sql.DB
-	listener              *pq.Listener
-	queueMaxDeliveries    int
-	queueMaxMessageLength int
-	deleteOnError         bool
+	tableName          string
+	pool               *pgxpool.Pool
+	listener           *pgxpool.Conn
+	queueMaxDeliveries int
+	keepOnError        bool
 
 	closeOnce sync.Once
-	closed    chan struct{}
+	cancel    context.CancelFunc
 
 	mu            sync.RWMutex
 	subscriptions map[chan struct{}]string
@@ -106,6 +100,8 @@ type Client struct {
 	vacuumSingleflight    singleflight.Group
 	vacuumPID             pidctl.Controller
 	vacuumCurrentPageSize int64
+
+	seqName string
 }
 
 // ClientOption reconfigures the behavior of the pgqueue Client.
@@ -126,14 +122,6 @@ func WithMaxDeliveries(maxDeliveries int) ClientOption {
 	}
 }
 
-// WithMaxMessageLength indicates how long each message can be before it is
-// considered an error. If zero, it imposes no limit
-func WithMaxMessageLength(maxMessageLength int) ClientOption {
-	return func(c *Client) {
-		c.queueMaxMessageLength = maxMessageLength
-	}
-}
-
 // DisableAutoVacuum forces the use of manual queue clean up.
 func DisableAutoVacuum() ClientOption {
 	return func(c *Client) {
@@ -143,36 +131,25 @@ func DisableAutoVacuum() ClientOption {
 	}
 }
 
-// DisableDeadletterQueue forces the errored messages to be deleted from the
-// queue.
-func DisableDeadletterQueue() ClientOption {
+// EnableDeadletterQueue keeps errored messages for later inspection.
+func EnableDeadletterQueue() ClientOption {
 	return func(c *Client) {
-		c.deleteOnError = true
+		c.keepOnError = true
 	}
 }
 
 // Open uses the given database connection and start operating the queue system.
-func Open(dsn string, opts ...ClientOption) (*Client, error) {
-	connector, err := pq.NewConnector(dsn)
-	if err != nil {
-		return nil, fmt.Errorf("bad DSN: %w", err)
-	}
-	db := sql.OpenDB(connector)
-	if err := db.Ping(); err != nil {
-		return nil, fmt.Errorf("cannot open database: %w", err)
-	}
-	listener := pq.NewListener(dsn, 1*time.Millisecond, 1*time.Millisecond, func(t pq.ListenerEventType, err error) {})
+func Open(ctx context.Context, pool *pgxpool.Pool, opts ...ClientOption) (*Client, error) {
+	ctx, cancel := context.WithCancel(ctx)
 	c := &Client{
 		tableName:     defaultTableName,
-		db:            db,
-		listener:      listener,
+		pool:          pool,
 		subscriptions: make(map[chan struct{}]string),
 
-		vacuumTicker:          time.NewTicker(defaultVacuumFrequency),
-		queueMaxDeliveries:    DefaultMaxDeliveriesCount,
-		queueMaxMessageLength: DefaultMaxMessageLength,
+		vacuumTicker:       time.NewTicker(defaultVacuumFrequency),
+		queueMaxDeliveries: DefaultMaxDeliveriesCount,
 		vacuumPID: pidctl.Controller{
-			// each adjusment step must be +/- 500 rows
+			// each adjustment step must be +/- 500 rows
 			P:   big.NewRat(500, 1),
 			I:   big.NewRat(3, 1),
 			D:   big.NewRat(3, 1),
@@ -184,28 +161,38 @@ func Open(dsn string, opts ...ClientOption) (*Client, error) {
 		},
 		vacuumCurrentPageSize: vacuumInitialPageSize,
 
-		closed: make(chan struct{}),
+		cancel: cancel,
 	}
 	for _, opt := range opts {
 		opt(c)
 	}
-	if err := listener.Listen(c.tableName); err != nil {
-		return nil, fmt.Errorf("cannot subscribe for notifications: %w", err)
+	conn, err := c.pool.Acquire(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("cannot acquire connection: %w", err)
 	}
-	go c.forwardNotifications()
+	defer conn.Release()
+	seqName, err := conn.Conn().PgConn().EscapeString(c.tableName + "_rvn")
+	if err != nil {
+		return nil, fmt.Errorf("cannot escape sequence name: %w", err)
+	}
+	c.seqName = `'` + seqName + `'`
+	if err := c.setupListener(ctx); err != nil {
+		return nil, err
+	}
+	go c.forwardNotifications(ctx)
 	if c.vacuumTicker != nil {
-		go c.runAutoVacuum()
+		go c.runAutoVacuum(ctx)
 	}
-	return c, nil
+	return c, ctx.Err()
 }
 
-func (c *Client) runAutoVacuum() {
+func (c *Client) runAutoVacuum(ctx context.Context) {
 	for {
 		select {
-		case <-c.closed:
+		case <-ctx.Done():
 			return
 		case <-c.vacuumTicker.C:
-			c.Vacuum()
+			c.Vacuum(ctx)
 		}
 	}
 }
@@ -240,11 +227,31 @@ func (c *Client) unsubscribe(sub chan struct{}) {
 	delete(c.subscriptions, sub)
 }
 
-func (c *Client) forwardNotifications() {
-	for n := range c.listener.NotificationChannel() {
+func (c *Client) setupListener(ctx context.Context) error {
+	listenerConn, err := c.pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("cannot acquire listener connection: %w", err)
+	}
+	if _, err := listenerConn.Exec(ctx, "LISTEN "+quoteIdentifier(c.tableName)); err != nil {
+		return fmt.Errorf("cannot subscribe for notifications: %w", err)
+	}
+	c.listener = listenerConn
+	return nil
+}
+
+func (c *Client) forwardNotifications(ctx context.Context) {
+	defer c.listener.Release()
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		notification, err := c.listener.Conn().WaitForNotification(ctx)
+		if err != nil {
+			return
+		}
 		c.mu.RLock()
 		for ch, queue := range c.subscriptions {
-			dispatch := n == nil || n.Extra == queue
+			dispatch := notification.Payload == queue
 			if !dispatch {
 				continue
 			}
@@ -257,36 +264,13 @@ func (c *Client) forwardNotifications() {
 	}
 }
 
-// ClientCloseError reports all the errors that happened during client close.
-type ClientCloseError struct {
-	ListenerError error
-	DriverError   error
-}
-
-// Is detects if the given target matches either the listener or the driver
-// error.
-func (e *ClientCloseError) Is(target error) bool {
-	return errors.Is(e.ListenerError, target) || errors.Is(e.DriverError, target)
-}
-
-func (e *ClientCloseError) Error() string {
-	return fmt.Sprintf("listener: %v | driver: %v", e.ListenerError, e.DriverError)
-}
-
 // Close stops the queue system.
 func (c *Client) Close() error {
 	err := ErrAlreadyClosed
 	c.closeOnce.Do(func() {
 		err = nil
-		close(c.closed)
-		listenerErr := c.listener.Close()
-		driverErr := c.db.Close()
-		if listenerErr != nil || driverErr != nil {
-			err = &ClientCloseError{
-				ListenerError: listenerErr,
-				DriverError:   driverErr,
-			}
-		}
+		c.cancel()
+		c.pool.Close()
 	})
 	return err
 }
@@ -294,11 +278,10 @@ func (c *Client) Close() error {
 // Queue configures a queue.
 func (c *Client) Queue(queue string) *Queue {
 	q := &Queue{
-		client:           c,
-		queue:            queue,
-		closed:           make(chan struct{}),
-		maxMessageLength: c.queueMaxMessageLength,
-		deleteOnError:    c.deleteOnError,
+		client:      c,
+		queue:       queue,
+		closed:      make(chan struct{}),
+		keepOnError: c.keepOnError,
 	}
 	c.add(q)
 	return q
@@ -306,58 +289,66 @@ func (c *Client) Queue(queue string) *Queue {
 
 // DumpDeadLetterQueue writes the messages into the writer and remove them from
 // the database.
-func (c *Client) DumpDeadLetterQueue(queue string, w io.Writer) error {
-	if c.deleteOnError {
+func (c *Client) DumpDeadLetterQueue(ctx context.Context, queue string, w io.Writer) error {
+	if !c.keepOnError {
 		return ErrDeadletterQueueDisabled
 	}
-	rows, err := c.db.Query(`
-		SELECT
-			id, content
-		FROM
-			`+pq.QuoteIdentifier(c.tableName)+`
-		WHERE
-			queue = $1
-	`, DefaultDeadLetterQueueNamePrefix+"-"+queue)
-	if err != nil {
-		return fmt.Errorf("cannot load dead letter queue messages: %w", err)
-	}
-	defer rows.Close()
-	enc := json.NewEncoder(w)
-	for rows.Next() {
-		var row struct {
-			ID      uint64 `json:"id"`
-			Content []byte `json:"content"`
+
+	return c.acquireConnDo(ctx, func(conn *nonCancelableConn) error {
+		rows, err := conn.Query(ctx, `
+			SELECT
+				id, content
+			FROM
+				`+quoteIdentifier(c.tableName)+`
+			WHERE
+				queue = $1
+		`, DefaultDeadLetterQueueNamePrefix+"-"+queue)
+		if err != nil {
+			return fmt.Errorf("cannot load dead letter queue messages: %w", err)
 		}
-		if err := rows.Scan(&row.ID, &row.Content); err != nil {
-			return fmt.Errorf("cannot parse message row: %w", err)
+		defer rows.Close()
+		enc := json.NewEncoder(w)
+		for rows.Next() {
+			var row struct {
+				ID      uint64 `json:"id"`
+				Content []byte `json:"content"`
+			}
+			if err := rows.Scan(&row.ID, &row.Content); err != nil {
+				return fmt.Errorf("cannot parse message row: %w", err)
+			}
+			if err := enc.Encode(row); err != nil {
+				return fmt.Errorf("cannot flush message row: %w", err)
+			}
+			if _, err := c.pool.Exec(ctx, `DELETE FROM `+quoteIdentifier(c.tableName)+` WHERE id = $1`, row.ID); err != nil {
+				return fmt.Errorf("cannot delete flushed message: %w", err)
+			}
 		}
-		if err := enc.Encode(row); err != nil {
-			return fmt.Errorf("cannot flush message row: %w", err)
-		}
-		if _, err := c.db.Exec(`DELETE FROM `+pq.QuoteIdentifier(c.tableName)+` WHERE id = $1`, row.ID); err != nil {
-			return fmt.Errorf("cannot delete flushed message: %w", err)
-		}
-	}
-	return rows.Err()
+		return rows.Err()
+	})
 }
 
 // CreateTable prepares the underlying table for the queue system.
-func (c *Client) CreateTable() error {
-	_, err := c.db.Exec(`
-		CREATE SEQUENCE IF NOT EXISTS ` + pq.QuoteIdentifier(c.tableName+"_rvn") + ` AS BIGINT CYCLE;
-		CREATE TABLE IF NOT EXISTS ` + pq.QuoteIdentifier(c.tableName) + ` (
-			id SERIAL PRIMARY KEY,
-			rvn BIGINT DEFAULT nextval(` + pq.QuoteLiteral(c.tableName+"_rvn") + `),
-			queue VARCHAR,
-			state VARCHAR,
-			deliveries INT NOT NULL DEFAULT 0,
-			leased_until TIMESTAMP WITHOUT TIME ZONE,
-			content BYTEA
-		);
-		CREATE INDEX IF NOT EXISTS ` + pq.QuoteIdentifier(c.tableName+"_pop") + ` ON ` + pq.QuoteIdentifier(c.tableName) + ` (queue, state);
-		CREATE INDEX IF NOT EXISTS ` + pq.QuoteIdentifier(c.tableName+"_vacuum") + ` ON ` + pq.QuoteIdentifier(c.tableName) + ` (queue, state, deliveries, leased_until);
-	`)
-	return err
+func (c *Client) CreateTable(ctx context.Context) error {
+	return c.acquireConnDo(ctx, func(conn *nonCancelableConn) error {
+		_, err := conn.Exec(ctx, `
+			CREATE SEQUENCE IF NOT EXISTS `+quoteIdentifier(c.tableName+"_rvn")+` AS BIGINT CYCLE;
+			CREATE TABLE IF NOT EXISTS `+quoteIdentifier(c.tableName)+` (
+				id SERIAL PRIMARY KEY,
+				rvn BIGINT DEFAULT nextval(`+c.seqName+`),
+				queue VARCHAR,
+				state VARCHAR,
+				deliveries INT NOT NULL DEFAULT 0,
+				leased_until TIMESTAMP WITHOUT TIME ZONE,
+				content BYTEA
+			);
+			CREATE INDEX IF NOT EXISTS `+quoteIdentifier(c.tableName+"_pop")+` ON `+quoteIdentifier(c.tableName)+` (queue, state);
+			CREATE INDEX IF NOT EXISTS `+quoteIdentifier(c.tableName+"_vacuum")+` ON `+quoteIdentifier(c.tableName)+` (queue, state, deliveries, leased_until);
+		`)
+		if err != nil {
+			return fmt.Errorf("cannot create table: %w", err)
+		}
+		return nil
+	})
 }
 
 // VacuumStats reports the consequences of the clean up.
@@ -372,15 +363,14 @@ type VacuumStats struct {
 }
 
 // Vacuum cleans up the queue from done or dead messages.
-func (c *Client) Vacuum() {
+func (c *Client) Vacuum(ctx context.Context) {
 	c.vacuumSingleflight.Do("vacuum", func() (interface{}, error) {
 		start := time.Now()
 		c.mu.RLock()
-		knownQueues := make([]*Queue, len(c.knownQueues))
-		copy(knownQueues, c.knownQueues)
+		knownQueues := slices.Clone(c.knownQueues)
 		c.mu.RUnlock()
 		for _, q := range knownQueues {
-			s := c.vacuum(q)
+			s := c.vacuum(ctx, q)
 			q.vacuumStatsMu.Lock()
 			q.vacuumStats = s
 			q.vacuumStats.LastRun = start
@@ -395,104 +385,109 @@ func (c *Client) Vacuum() {
 	})
 }
 
-func (c *Client) vacuum(q *Queue) (stats VacuumStats) {
-	_, err := c.db.Exec(`
-		DELETE FROM
-			`+pq.QuoteIdentifier(c.tableName)+`
-		WHERE
-			id IN (
-				SELECT
-					id
-				FROM
-					`+pq.QuoteIdentifier(c.tableName)+`
-				WHERE
-					queue = $1
-					AND state = $2
-				LIMIT CASE WHEN $3 < 0 THEN 0 ELSE $3 END
-				FOR UPDATE SKIP LOCKED
-			)
-	`, q.queue, Done, c.vacuumCurrentPageSize)
-	if err != nil {
-		stats.Err = fmt.Errorf("cannot store message: %w", err)
-		return stats
-	}
-	if c.queueMaxDeliveries == 0 {
-		return stats
-	}
-	_, err = c.db.Exec(`
-		UPDATE
-			`+pq.QuoteIdentifier(c.tableName)+`
-		SET
-			rvn = nextval(`+pq.QuoteLiteral(c.tableName+"_rvn")+`),
-			state = $1
-		WHERE
-			id IN (
-				SELECT
-					id
-				FROM
-					`+pq.QuoteIdentifier(c.tableName)+`
-				WHERE
-					queue = $2
-					AND state = $3
-					AND deliveries < $4
-					AND leased_until < NOW()
-				LIMIT CASE WHEN $5 < 0 THEN 0 ELSE $5 END
-				FOR UPDATE SKIP LOCKED
-			)
-	`, New, q.queue, InProgress, c.queueMaxDeliveries, c.vacuumCurrentPageSize)
-	if err != nil {
-		stats.Err = fmt.Errorf("cannot recover messages: %w", err)
-		return stats
-	}
-	if q.deleteOnError {
-		_, err = c.db.Exec(`
+func (c *Client) vacuum(ctx context.Context, q *Queue) (stats VacuumStats) {
+	err := c.acquireConnDo(ctx, func(conn *nonCancelableConn) error {
+		_, err := conn.Exec(ctx, `
 			DELETE FROM
-				`+pq.QuoteIdentifier(c.tableName)+`
+				`+quoteIdentifier(c.tableName)+`
 			WHERE
 				id IN (
 					SELECT
 						id
 					FROM
-						`+pq.QuoteIdentifier(c.tableName)+`
+						`+quoteIdentifier(c.tableName)+`
 					WHERE
 						queue = $1
 						AND state = $2
-						AND deliveries >= $3
-						AND leased_until < NOW()
-					LIMIT CASE WHEN $4 < 0 THEN 0 ELSE $4 END
+					LIMIT CASE WHEN $3 < 0 THEN 0 ELSE $3 END
 					FOR UPDATE SKIP LOCKED
 				)
-		`, q.queue, InProgress, c.queueMaxDeliveries, c.vacuumCurrentPageSize)
+		`, q.queue, Done, c.vacuumCurrentPageSize)
 		if err != nil {
-			stats.Err = fmt.Errorf("cannot delete errored message from the queue: %w", err)
-			return stats
+			return fmt.Errorf("cannot store message: %w", err)
 		}
-	} else {
-		_, err = c.db.Exec(`
+		if c.queueMaxDeliveries == 0 {
+			return nil
+		}
+		_, err = conn.Exec(ctx, `
 			UPDATE
-				`+pq.QuoteIdentifier(c.tableName)+`
+				`+quoteIdentifier(c.tableName)+`
 			SET
-				rvn = nextval(`+pq.QuoteLiteral(q.client.tableName+"_rvn")+`),
-				queue = $1
+				rvn = nextval(`+c.seqName+`),
+				state = $1
 			WHERE
 				id IN (
 					SELECT
 						id
 					FROM
-						`+pq.QuoteIdentifier(c.tableName)+`
+						`+quoteIdentifier(c.tableName)+`
 					WHERE
 						queue = $2
 						AND state = $3
-						AND deliveries >= $4
+						AND deliveries < $4
 						AND leased_until < NOW()
 					LIMIT CASE WHEN $5 < 0 THEN 0 ELSE $5 END
 					FOR UPDATE SKIP LOCKED
 				)
-		`, DefaultDeadLetterQueueNamePrefix+"-"+q.queue, q.queue, InProgress, c.queueMaxDeliveries, c.vacuumCurrentPageSize)
+		`, New, q.queue, InProgress, c.queueMaxDeliveries, c.vacuumCurrentPageSize)
 		if err != nil {
-			stats.Err = fmt.Errorf("cannot move message to dead letter queue: %w", err)
-			return stats
+			return fmt.Errorf("cannot recover messages: %w", err)
 		}
+		if !q.keepOnError {
+			_, err := conn.Exec(ctx, `
+				DELETE FROM
+					`+quoteIdentifier(c.tableName)+`
+				WHERE
+					id IN (
+						SELECT
+							id
+						FROM
+							`+quoteIdentifier(c.tableName)+`
+						WHERE
+							queue = $1
+							AND state = $2
+							AND deliveries >= $3
+							AND leased_until < NOW()
+						LIMIT CASE WHEN $4 < 0 THEN 0 ELSE $4 END
+						FOR UPDATE SKIP LOCKED
+					)
+			`, q.queue, InProgress, c.queueMaxDeliveries, c.vacuumCurrentPageSize)
+			if err != nil {
+				return fmt.Errorf("cannot delete errored message from the queue: %w", err)
+			}
+		} else {
+			_, err := conn.Exec(ctx, `
+				UPDATE
+					`+quoteIdentifier(c.tableName)+`
+				SET
+					rvn = nextval(`+c.seqName+`),
+					queue = $1
+				WHERE
+					id IN (
+						SELECT
+							id
+						FROM
+							`+quoteIdentifier(c.tableName)+`
+						WHERE
+							queue = $2
+							AND state = $3
+							AND deliveries >= $4
+							AND leased_until < NOW()
+						LIMIT CASE WHEN $5 < 0 THEN 0 ELSE $5 END
+						FOR UPDATE SKIP LOCKED
+					)
+			`, DefaultDeadLetterQueueNamePrefix+"-"+q.queue, q.queue, InProgress, c.queueMaxDeliveries, c.vacuumCurrentPageSize)
+			if err != nil {
+				return fmt.Errorf("cannot move message to dead letter queue: %w", err)
+			}
+		}
+		if _, err := c.pool.Exec(ctx, "VACUUM (SKIP_LOCKED true) "+quoteIdentifier(c.tableName)); err != nil {
+			return fmt.Errorf("cannot vacuum table %q: %w", c.tableName, err)
+		}
+		return nil
+	})
+	if err != nil {
+		stats.Err = err
 	}
 	return stats
 }
@@ -508,8 +503,7 @@ type Queue struct {
 	vacuumStatsMu sync.RWMutex
 	vacuumStats   VacuumStats
 
-	maxMessageLength int
-	deleteOnError    bool
+	keepOnError bool
 }
 
 // VacuumStats reports the result of the last vacuum cycle.
@@ -534,92 +528,94 @@ func (q *Queue) Watch(lease time.Duration) *Watcher {
 // marks as it as InProgress until the defined lease duration. If the message
 // is not marked as Done by the lease time, it is returned to the queue. Lease
 // duration must be multiple of milliseconds.
-func (q *Queue) Reserve(lease time.Duration) (*Message, error) {
+func (q *Queue) Reserve(ctx context.Context, lease time.Duration) (*Message, error) {
 	if q.isClosed() {
 		return nil, ErrAlreadyClosed
 	}
 	if err := validDuration(lease); err != nil {
 		return nil, err
 	}
-	var (
-		id          uint64
-		content     []byte
-		leasedUntil time.Time
-		rvn         int64
-	)
-	row := q.client.db.QueryRow(`
-		UPDATE `+pq.QuoteIdentifier(q.client.tableName)+`
-		SET
-			rvn = nextval(`+pq.QuoteLiteral(q.client.tableName+"_rvn")+`),
-			deliveries = deliveries + 1,
-			state = $1,
-			leased_until = now() + $2::interval
-		WHERE
-			id IN (
-				SELECT
-					id
-				FROM
-					`+pq.QuoteIdentifier(q.client.tableName)+`
-				WHERE
-					queue = $3
-					AND state = $4
-				ORDER BY
-					id ASC
-				LIMIT 1
-				FOR UPDATE SKIP LOCKED
-			)
-		RETURNING id, content, leased_until, rvn
-	`, InProgress, lease.String(), q.queue, New)
-	if err := row.Scan(&id, &content, &leasedUntil, &rvn); err != nil && err != sql.ErrNoRows {
-		return nil, fmt.Errorf("cannot read message: %w", err)
-	} else if err == sql.ErrNoRows {
-		return nil, ErrEmptyQueue
-	}
-	return &Message{
-		id:          id,
-		Content:     content,
-		LeasedUntil: leasedUntil,
-		client:      q.client,
-		rvn:         rvn,
-	}, nil
+	var msg *Message
+	err := q.client.acquireConnDo(ctx, func(conn *nonCancelableConn) error {
+		row := conn.QueryRow(ctx, `
+			UPDATE `+quoteIdentifier(q.client.tableName)+`
+			SET
+				rvn = nextval(`+q.client.seqName+`),
+				deliveries = deliveries + 1,
+				state = $1,
+				leased_until = now() + $2::interval
+			WHERE
+				id IN (
+					SELECT
+						id
+					FROM
+						`+quoteIdentifier(q.client.tableName)+`
+					WHERE
+						queue = $3
+						AND state = $4
+					ORDER BY
+						id ASC
+					LIMIT 1
+					FOR UPDATE SKIP LOCKED
+				)
+			RETURNING id, content, leased_until, rvn
+		`, InProgress, lease.String(), q.queue, New)
+		var (
+			id          uint64
+			content     []byte
+			leasedUntil time.Time
+			rvn         int64
+		)
+		if err := row.Scan(&id, &content, &leasedUntil, &rvn); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("cannot reserve message: %w", err)
+		} else if errors.Is(err, pgx.ErrNoRows) {
+			return ErrEmptyQueue
+		}
+		msg = &Message{
+			id:          id,
+			Content:     content,
+			LeasedUntil: leasedUntil,
+			client:      q.client,
+			rvn:         rvn,
+		}
+		return nil
+	})
+	return msg, err
+
 }
 
 // Push enqueues the given content to the target queue.
-func (q *Queue) Push(content []byte) error {
+func (q *Queue) Push(ctx context.Context, content []byte) error {
 	if q.isClosed() {
 		return ErrAlreadyClosed
 	}
-	if err := q.validMessageLength(content); err != nil {
-		return err
-	}
-
-	if _, err := q.client.db.Exec(`INSERT INTO `+pq.QuoteIdentifier(q.client.tableName)+` (queue, state, content) VALUES ($1, $2, $3)`, q.queue, New, content); err != nil {
-		return fmt.Errorf("cannot store message: %w", err)
-	}
-	if _, err := q.client.db.Exec(`NOTIFY ` + pq.QuoteIdentifier(q.client.tableName) + `, ` + pq.QuoteLiteral(q.queue)); err != nil {
-		return fmt.Errorf("cannot send push notification: %w", err)
-	}
-	return nil
-}
-
-func (q *Queue) validMessageLength(content []byte) error {
-	if q.maxMessageLength > 0 && len(content) > q.maxMessageLength {
-		return ErrMessageTooLarge
-	}
-	return nil
+	return q.client.acquireConnDo(ctx, func(conn *nonCancelableConn) error {
+		queueName, err := conn.EscapeString(q.queue)
+		if err != nil {
+			return fmt.Errorf("cannot escape queue name: %w", err)
+		}
+		if _, err := conn.Exec(ctx, `INSERT INTO `+quoteIdentifier(q.client.tableName)+` (queue, state, content) VALUES ($1, $2, $3)`, q.queue, New, content); err != nil {
+			return fmt.Errorf("cannot store message: %w", err)
+		}
+		if _, err := conn.Exec(ctx, `NOTIFY `+quoteIdentifier(q.client.tableName)+`, '`+queueName+`'`); err != nil {
+			return fmt.Errorf("cannot send push notification: %w", err)
+		}
+		return nil
+	})
 }
 
 // Pop retrieves the pending message from the queue, if any available. If the
 // queue is empty, it returns ErrEmptyQueue.
-func (q *Queue) Pop() ([]byte, error) {
+func (q *Queue) Pop(ctx context.Context) ([]byte, error) {
 	if q.isClosed() {
 		return nil, ErrAlreadyClosed
 	}
 	var content []byte
-	row := q.client.db.QueryRow(`
-			UPDATE `+pq.QuoteIdentifier(q.client.tableName)+`
+	err := q.client.acquireConnDo(ctx, func(conn *nonCancelableConn) error {
+		row := conn.QueryRow(ctx, `
+			UPDATE `+quoteIdentifier(q.client.tableName)+`
 			SET
-				rvn = nextval(`+pq.QuoteLiteral(q.client.tableName+"_rvn")+`),
+				rvn = nextval(`+q.client.seqName+`),
 				deliveries = deliveries + 1,
 				state = $1
 			WHERE
@@ -627,7 +623,7 @@ func (q *Queue) Pop() ([]byte, error) {
 					SELECT
 						id
 					FROM
-						`+pq.QuoteIdentifier(q.client.tableName)+`
+						`+quoteIdentifier(q.client.tableName)+`
 					WHERE
 						queue = $2
 						AND state = $3
@@ -638,12 +634,14 @@ func (q *Queue) Pop() ([]byte, error) {
 				)
 			RETURNING content
 		`, Done, q.queue, New)
-	if err := row.Scan(&content); err != nil && err != sql.ErrNoRows {
-		return content, fmt.Errorf("cannot read message: %w", err)
-	} else if err == sql.ErrNoRows {
-		return content, ErrEmptyQueue
-	}
-	return content, nil
+		if err := row.Scan(&content); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("cannot pop message: %w", err)
+		} else if errors.Is(err, pgx.ErrNoRows) {
+			return ErrEmptyQueue
+		}
+		return nil
+	})
+	return content, err
 }
 
 // Close closes the queue.
@@ -681,7 +679,7 @@ type Watcher struct {
 const missedNotificationFrequency = 500 * time.Millisecond
 
 // Next waits for the next message to arrive and store it into Watcher.
-func (w *Watcher) Next() bool {
+func (w *Watcher) Next(ctx context.Context) bool {
 	unsub := func() {
 		w.queue.client.unsubscribe(w.notifications)
 	}
@@ -697,9 +695,9 @@ func (w *Watcher) Next() bool {
 	tick := time.NewTicker(missedNotificationFrequency)
 	defer tick.Stop()
 	for {
-		switch msg, err := w.queue.Reserve(w.lease); err {
+		switch msg, err := w.queue.Reserve(ctx, w.lease); err {
 		case ErrEmptyQueue:
-		case sql.ErrConnDone, ErrAlreadyClosed:
+		case ErrAlreadyClosed:
 			w.err = err
 			unsub()
 			return false
@@ -711,7 +709,10 @@ func (w *Watcher) Next() bool {
 		select {
 		case <-w.notifications:
 		case <-tick.C:
-			go w.queue.client.listener.Ping()
+		case <-w.queue.closed:
+			w.err = ErrAlreadyClosed
+			unsub()
+			return false
 		}
 	}
 }
@@ -736,103 +737,104 @@ type Message struct {
 }
 
 // Done mark message as done.
-func (m *Message) Done() error {
-	result, err := m.client.db.Exec(`
-		UPDATE
-			`+pq.QuoteIdentifier(m.client.tableName)+`
-		SET
-			rvn = nextval(`+pq.QuoteLiteral(m.client.tableName+"_rvn")+`),
-			state = $1
-		WHERE
-			id IN (
-				SELECT
-					id
-				FROM
-					`+pq.QuoteIdentifier(m.client.tableName)+`
-				WHERE
-					id = $2
-					AND rvn = $3
-					AND leased_until >= NOW()
-				FOR UPDATE NOWAIT
-			)
+func (m *Message) Done(ctx context.Context) error {
+	return m.client.acquireConnDo(ctx, func(conn *nonCancelableConn) error {
+		result, err := conn.Exec(ctx, `
+			UPDATE
+				`+quoteIdentifier(m.client.tableName)+`
+			SET
+				rvn = nextval(`+m.client.seqName+`),
+				state = $1
+			WHERE
+				id IN (
+					SELECT
+						id
+					FROM
+						`+quoteIdentifier(m.client.tableName)+`
+					WHERE
+						id = $2
+						AND rvn = $3
+						AND leased_until >= NOW()
+					FOR UPDATE NOWAIT
+				)
 		`, Done, m.id, m.rvn)
-	if err != nil {
-		return err
-	}
-	affectedRows, err := result.RowsAffected()
-	if err != nil {
-		return err
-	} else if affectedRows == 0 {
-		return ErrMessageExpired
-	}
-	return nil
+		if err != nil {
+			return err
+		}
+		affectedRows := result.RowsAffected()
+		if affectedRows == 0 {
+			return ErrMessageExpired
+		}
+		return nil
+	})
 }
 
 // Release put the message back to the queue.
-func (m *Message) Release() error {
-	result, err := m.client.db.Exec(`
-		UPDATE
-			`+pq.QuoteIdentifier(m.client.tableName)+`
-		SET
-			rvn = nextval(`+pq.QuoteLiteral(m.client.tableName+"_rvn")+`), leased_until = null, state = $1
-		WHERE
-			id IN (
-				SELECT
-					id
-				FROM
-					`+pq.QuoteIdentifier(m.client.tableName)+`
-				WHERE
-					id = $2
-					AND rvn = $3
-					AND leased_until >= NOW()
-				FOR UPDATE NOWAIT
-			)
+func (m *Message) Release(ctx context.Context) error {
+	return m.client.acquireConnDo(ctx, func(conn *nonCancelableConn) error {
+		result, err := conn.Exec(ctx, `
+			UPDATE
+				`+quoteIdentifier(m.client.tableName)+`
+			SET
+				rvn = nextval(`+m.client.seqName+`), leased_until = null, state = $1
+			WHERE
+				id IN (
+					SELECT
+						id
+					FROM
+						`+quoteIdentifier(m.client.tableName)+`
+					WHERE
+						id = $2
+						AND rvn = $3
+						AND leased_until >= NOW()
+					FOR UPDATE NOWAIT
+				)
 		`, New, m.id, m.rvn)
-	if err != nil {
-		return err
-	}
-	affectedRows, err := result.RowsAffected()
-	if err != nil {
-		return err
-	} else if affectedRows == 0 {
-		return ErrMessageExpired
-	}
-	return nil
+		if err != nil {
+			return err
+		}
+		affectedRows := result.RowsAffected()
+		if affectedRows == 0 {
+			return ErrMessageExpired
+		}
+		return nil
+	})
 }
 
 // Touch extends the lease by the given duration. The duration must be multiples
 // of milliseconds.
-func (m *Message) Touch(extension time.Duration) error {
+func (m *Message) Touch(ctx context.Context, extension time.Duration) error {
 	if err := validDuration(extension); err != nil {
 		return err
 	}
-	row := m.client.db.QueryRow(`
-		UPDATE
-			`+pq.QuoteIdentifier(m.client.tableName)+`
-		SET
-			rvn = nextval(`+pq.QuoteLiteral(m.client.tableName+"_rvn")+`),
-			leased_until = now() + $1::interval
-		WHERE
-			id IN (
-				SELECT
-					id
-				FROM
-					`+pq.QuoteIdentifier(m.client.tableName)+`
-				WHERE
-					id = $2
-					AND rvn = $3
-					AND leased_until >= NOW()
-				FOR UPDATE NOWAIT
-			)
-		RETURNING rvn, leased_until
-	`, extension.String(), m.id, m.rvn)
-	err := row.Scan(&m.rvn, &m.LeasedUntil)
-	if err == sql.ErrNoRows {
-		return ErrMessageExpired
-	} else if err != nil {
-		return err
-	}
-	return nil
+	return m.client.acquireConnDo(ctx, func(conn *nonCancelableConn) error {
+		row := conn.QueryRow(ctx, `
+			UPDATE
+				`+quoteIdentifier(m.client.tableName)+`
+			SET
+				rvn = nextval(`+m.client.seqName+`),
+				leased_until = now() + $1::interval
+			WHERE
+				id IN (
+					SELECT
+						id
+					FROM
+						`+quoteIdentifier(m.client.tableName)+`
+					WHERE
+						id = $2
+						AND rvn = $3
+						AND leased_until >= NOW()
+					FOR UPDATE NOWAIT
+				)
+			RETURNING rvn, leased_until
+		`, extension.String(), m.id, m.rvn)
+		if err := row.Scan(&m.rvn, &m.LeasedUntil); err == sql.ErrNoRows {
+			return ErrMessageExpired
+		} else if err != nil {
+			return err
+		}
+		return nil
+	})
 }
 
 func validDuration(d time.Duration) error {
@@ -841,4 +843,37 @@ func validDuration(d time.Duration) error {
 		return ErrInvalidDuration
 	}
 	return nil
+}
+
+func quoteIdentifier(s string) string {
+	return (pgx.Identifier{s}).Sanitize()
+}
+
+func (c *Client) acquireConnDo(ctx context.Context, f func(*nonCancelableConn) error) error {
+	conn, err := c.pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("cannot acquire connection: %w", err)
+	}
+	defer conn.Release()
+	return f(&nonCancelableConn{conn})
+}
+
+type nonCancelableConn struct {
+	conn *pgxpool.Conn
+}
+
+func (c *nonCancelableConn) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	return c.conn.Query(context.WithoutCancel(ctx), sql, args...)
+}
+
+func (c *nonCancelableConn) Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error) {
+	return c.conn.Exec(context.WithoutCancel(ctx), sql, arguments...)
+}
+
+func (c *nonCancelableConn) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	return c.conn.QueryRow(context.WithoutCancel(ctx), sql, args...)
+}
+
+func (c *nonCancelableConn) EscapeString(s string) (string, error) {
+	return c.conn.Conn().PgConn().EscapeString(s)
 }

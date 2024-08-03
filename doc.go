@@ -1,4 +1,4 @@
-// Copyright 2019 github.com/ucirello and cirello.io. All rights reserved.
+// Copyright 2024 github.com/ucirello and cirello.io. All rights reserved.
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -12,29 +12,32 @@
 // limitations under the License.
 
 // Package pgqueue is a library allows to use a single PostgreSQL instance as a
-// low-throughput queue server.
+// queue server.
 //
-//     client, err := pgqueue.Open(dsn)
-//     if err != nil {
-//         log.Fatalln("cannot open database connection:", err)
-//     }
-//     defer client.Close()
-//     if err := client.CreateTable(); err != nil {
-//         log.Fatalln("cannot create queue table:", err)
-//     }
-//     queue := client.Queue("example-queue-reservation")
-//     defer queue.Close()
-//     content := []byte("content")
-//     if err := queue.Push(content); err != nil {
-//         log.Fatalln("cannot push message to queue:", err)
-//     }
-//     r, err := queue.Reserve(1 * time.Minute)
-//     if err != nil {
-//         log.Fatalln("cannot reserve message from the queue:", err)
-//     }
-//     fmt.Printf("content: %s\n", r.Content)
-//     if err := r.Done(); err != nil {
-//         log.Fatalln("cannot mark message as done:", err)
-//     }
-//
+//	pool, err := pgxpool.New(context.Background(), dsn)
+//	if err != nil {
+//	    log.Fatalln("cannot open database connection pool:", err)
+//	}
+//	client, err := pgqueue.Open(dsn)
+//	if err != nil {
+//	    log.Fatalln("cannot open database connection:", err)
+//	}
+//	defer client.Close()
+//	if err := client.CreateTable(); err != nil {
+//	    log.Fatalln("cannot create queue table:", err)
+//	}
+//	queue := client.Queue("example-queue-reservation")
+//	defer queue.Close()
+//	content := []byte("content")
+//	if err := queue.Push(content); err != nil {
+//	    log.Fatalln("cannot push message to queue:", err)
+//	}
+//	r, err := queue.Reserve(1 * time.Minute)
+//	if err != nil {
+//	    log.Fatalln("cannot reserve message from the queue:", err)
+//	}
+//	fmt.Printf("content: %s\n", r.Content)
+//	if err := r.Done(); err != nil {
+//	    log.Fatalln("cannot mark message as done:", err)
+//	}
 package pgqueue

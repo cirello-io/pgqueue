@@ -1,4 +1,4 @@
-// Copyright 2019 github.com/ucirello and cirello.io. All rights reserved.
+// Copyright 2024 github.com/ucirello and cirello.io. All rights reserved.
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -15,6 +15,7 @@ package pgqueue
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -23,30 +24,38 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/lib/pq"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/sync/errgroup"
 )
 
 var dsn = os.Getenv("PGQUEUE_TEST_DSN")
 
+func setupPool(t *testing.T) *pgxpool.Pool {
+	pool, err := pgxpool.New(context.Background(), dsn)
+	if err != nil {
+		t.Fatal("cannot open database connection:", err)
+	}
+	return pool
+}
+
 func TestOverload(t *testing.T) {
 	t.Run("popPush", func(t *testing.T) {
-		t.Parallel()
-		client, err := Open(dsn, WithCustomTable("overloadpoppush"), DisableAutoVacuum())
+		ctx := context.Background()
+		client, err := Open(ctx, setupPool(t), WithCustomTable("overloadpoppush"), DisableAutoVacuum())
 		if err != nil {
 			t.Fatal("cannot open database connection:", err)
 		}
 		defer client.Close()
-		if err := client.CreateTable(); err != nil {
+		if err := client.CreateTable(ctx); err != nil {
 			t.Fatal("cannot create queue table:", err)
 		}
 		queue := client.Queue("queue-overload-pop-push")
 		defer queue.Close()
 		t.Log("vacuuming the queue")
-		client.Vacuum()
+		client.Vacuum(ctx)
 		t.Log("zeroing the queue")
 		for {
-			if _, err := queue.Pop(); err == ErrEmptyQueue {
+			if _, err := queue.Pop(ctx); err == ErrEmptyQueue {
 				break
 			} else if err != nil {
 				t.Fatal("cannot zero queue before overload test:", err)
@@ -56,7 +65,7 @@ func TestOverload(t *testing.T) {
 		t.Log("pushing messages")
 		for i := 0; i < 1_000; i++ {
 			content := []byte("content")
-			if err := queue.Push(content); err != nil {
+			if err := queue.Push(ctx, content); err != nil {
 				t.Fatal("cannot push message to queue:", err)
 			}
 		}
@@ -70,7 +79,7 @@ func TestOverload(t *testing.T) {
 		for i := 0; i < 10; i++ {
 			g.Go(func() error {
 				for {
-					_, err := queue.Pop()
+					_, err := queue.Pop(ctx)
 					if err == ErrEmptyQueue {
 						return nil
 					} else if err != nil {
@@ -91,22 +100,22 @@ func TestOverload(t *testing.T) {
 		}
 	})
 	t.Run("popReserveDone", func(t *testing.T) {
-		t.Parallel()
-		client, err := Open(dsn, WithCustomTable("overloadpopreservedone"), DisableAutoVacuum())
+		ctx := context.Background()
+		client, err := Open(ctx, setupPool(t), WithCustomTable("overloadpopreservedone"), DisableAutoVacuum())
 		if err != nil {
 			t.Fatal("cannot open database connection:", err)
 		}
 		defer client.Close()
-		if err := client.CreateTable(); err != nil {
+		if err := client.CreateTable(ctx); err != nil {
 			t.Fatal("cannot create queue table:", err)
 		}
 		queue := client.Queue("queue-overload-pop-reserve-done")
 		defer queue.Close()
 		t.Log("vacuuming the queue")
-		client.Vacuum()
+		client.Vacuum(ctx)
 		t.Log("zeroing the queue")
 		for {
-			if _, err := queue.Pop(); err == ErrEmptyQueue {
+			if _, err := queue.Pop(ctx); err == ErrEmptyQueue {
 				break
 			} else if err != nil {
 				t.Fatal("cannot zero queue before overload test:", err)
@@ -116,7 +125,7 @@ func TestOverload(t *testing.T) {
 		t.Log("pushing messages")
 		for i := 0; i < 1_000; i++ {
 			content := []byte("content")
-			if err := queue.Push(content); err != nil {
+			if err := queue.Push(ctx, content); err != nil {
 				t.Fatal("cannot push message to queue:", err)
 			}
 		}
@@ -130,14 +139,14 @@ func TestOverload(t *testing.T) {
 		for i := 0; i < 10; i++ {
 			g.Go(func() error {
 				for {
-					m, err := queue.Reserve(5 * time.Minute)
+					m, err := queue.Reserve(ctx, 5*time.Minute)
 					if err == ErrEmptyQueue {
 						return nil
 					} else if err != nil {
 						t.Log(err)
 						return err
 					}
-					m.Done()
+					m.Done(ctx)
 					mu.Lock()
 					totalMsg++
 					mu.Unlock()
@@ -160,38 +169,40 @@ func (w *badWriter) Write([]byte) (int, error) {
 }
 
 func TestDeadletterDump(t *testing.T) {
+	ctx := context.Background()
 	const reservationTime = 500 * time.Millisecond
-	client, err := Open(dsn,
+	client, err := Open(ctx, setupPool(t),
 		WithMaxDeliveries(2),
 		DisableAutoVacuum(),
+		EnableDeadletterQueue(),
 	)
 	if err != nil {
 		t.Fatal("cannot open database connection:", err)
 	}
 	defer client.Close()
-	if err := client.CreateTable(); err != nil {
+	if err := client.CreateTable(ctx); err != nil {
 		t.Fatal("cannot create queue table:", err)
 	}
-	t.Run("good dump", func(t *testing.T) {
+	t.Run("goodDump", func(t *testing.T) {
 		queue := client.Queue("example-deadletter-queue")
 		defer queue.Close()
 		content := []byte("the message")
-		if err := queue.Push(content); err != nil {
+		if err := queue.Push(ctx, content); err != nil {
 			t.Fatal("cannot push message to queue:", err)
 		}
-		if _, err := queue.Reserve(reservationTime); err != nil {
+		if _, err := queue.Reserve(ctx, reservationTime); err != nil {
 			t.Fatal("cannot reserve message from the queue (try):", err)
 		}
 		time.Sleep(2 * reservationTime)
-		client.Vacuum()
-		if _, err := queue.Reserve(reservationTime); err != nil {
+		client.Vacuum(ctx)
+		if _, err := queue.Reserve(ctx, reservationTime); err != nil {
 			t.Fatal("cannot reserve message from the queue (retry):", err)
 		}
 		time.Sleep(2 * reservationTime)
-		client.Vacuum()
+		client.Vacuum(ctx)
 
 		var buf bytes.Buffer
-		if err := client.DumpDeadLetterQueue("example-deadletter-queue", &buf); err != nil {
+		if err := client.DumpDeadLetterQueue(ctx, "example-deadletter-queue", &buf); err != nil {
 			t.Fatal("cannot dump dead letter queue")
 		}
 		t.Log(buf.String())
@@ -199,24 +210,24 @@ func TestDeadletterDump(t *testing.T) {
 			t.Fatal("bad dump found")
 		}
 	})
-	t.Run("bad io.Writer", func(t *testing.T) {
+	t.Run("badWriter", func(t *testing.T) {
 		queue := client.Queue("example-deadletter-queue-bad-writer")
 		defer queue.Close()
 		content := []byte("the message")
-		if err := queue.Push(content); err != nil {
+		if err := queue.Push(ctx, content); err != nil {
 			t.Fatal("cannot push message to queue:", err)
 		}
-		if _, err := queue.Reserve(reservationTime); err != nil {
+		if _, err := queue.Reserve(ctx, reservationTime); err != nil {
 			t.Fatal("cannot reserve message from the queue (try):", err)
 		}
 		time.Sleep(2 * reservationTime)
-		client.Vacuum()
-		if _, err := queue.Reserve(reservationTime); err != nil {
+		client.Vacuum(ctx)
+		if _, err := queue.Reserve(ctx, reservationTime); err != nil {
 			t.Fatal("cannot reserve message from the queue (retry):", err)
 		}
 		time.Sleep(2 * reservationTime)
-		client.Vacuum()
-		err := client.DumpDeadLetterQueue("example-deadletter-queue-bad-writer", &badWriter{})
+		client.Vacuum(ctx)
+		err := client.DumpDeadLetterQueue(ctx, "example-deadletter-queue-bad-writer", &badWriter{})
 		if err == nil {
 			t.Fatal("expected error not found")
 		}
@@ -225,22 +236,23 @@ func TestDeadletterDump(t *testing.T) {
 }
 
 func TestReconfiguredClient(t *testing.T) {
-	t.Run("custom table", func(t *testing.T) {
-		client, err := Open(dsn, WithCustomTable("queue2"))
+	t.Run("customTable", func(t *testing.T) {
+		ctx := context.Background()
+		client, err := Open(ctx, setupPool(t), WithCustomTable("queue2"))
 		if err != nil {
 			t.Fatal("cannot open database connection:", err)
 		}
 		defer client.Close()
-		if err := client.CreateTable(); err != nil {
+		if err := client.CreateTable(ctx); err != nil {
 			t.Fatal("cannot create queue table:", err)
 		}
 		queue := client.Queue("queue-reconfigured-client")
 		defer queue.Close()
 		content := []byte("content")
-		if err := queue.Push(content); err != nil {
+		if err := queue.Push(ctx, content); err != nil {
 			t.Fatal("cannot push message to queue:", err)
 		}
-		poppedContent, err := queue.Pop()
+		poppedContent, err := queue.Pop(ctx)
 		if err != nil {
 			t.Fatal("cannot pop message from the queue:", err)
 		}
@@ -248,24 +260,9 @@ func TestReconfiguredClient(t *testing.T) {
 			t.Errorf("unexpected output: %s", poppedContent)
 		}
 	})
-	t.Run("valid DSN to bad target", func(t *testing.T) {
-		client, err := Open("postgresql://server-404")
-		if err == nil {
-			client.Close()
-			t.Fatal("expected error not found")
-		}
-		t.Log("error:", err)
-	})
-	t.Run("bad DSN", func(t *testing.T) {
-		client, err := Open("postgresql://bad-target?client_encoding=absurd")
-		if err == nil {
-			client.Close()
-			t.Fatal("expected error not found")
-		}
-		t.Log("error:", err)
-	})
-	t.Run("bad listener", func(t *testing.T) {
-		client, err := Open(dsn, func(c *Client) {
+	t.Run("badListener", func(t *testing.T) {
+		ctx := context.Background()
+		client, err := Open(ctx, setupPool(t), func(c *Client) {
 			// sabotage the client during setup
 			c.Close()
 		})
@@ -278,7 +275,8 @@ func TestReconfiguredClient(t *testing.T) {
 }
 
 func TestCloseError(t *testing.T) {
-	client, err := Open(dsn)
+	ctx := context.Background()
+	client, err := Open(ctx, setupPool(t))
 	if err != nil {
 		t.Fatal("cannot open database connection:", err)
 	}
@@ -293,24 +291,25 @@ func TestCloseError(t *testing.T) {
 }
 
 func TestClosedQueue(t *testing.T) {
-	client, err := Open(dsn)
+	ctx := context.Background()
+	client, err := Open(ctx, setupPool(t))
 	if err != nil {
 		t.Fatal("cannot open database connection:", err)
 	}
 	defer client.Close()
 	q := client.Queue("closed-client-queue")
 	q.Close()
-	if err := q.Push(nil); err != ErrAlreadyClosed {
+	if err := q.Push(ctx, nil); err != ErrAlreadyClosed {
 		t.Error("push on closed queue must fail with ErrAlreadyClose:", err)
 	}
-	if _, err := q.Pop(); err != ErrAlreadyClosed {
+	if _, err := q.Pop(ctx); err != ErrAlreadyClosed {
 		t.Error("pop on closed queue must fail with ErrAlreadyClose:", err)
 	}
-	if _, err := q.Reserve(0); err != ErrAlreadyClosed {
+	if _, err := q.Reserve(ctx, 0); err != ErrAlreadyClosed {
 		t.Error("reserve on closed queue must fail with ErrAlreadyClose:", err)
 	}
 	w := q.Watch(0)
-	if w.Next() {
+	if w.Next(ctx) {
 		t.Error("Watcher.Next on closed queue must be false")
 	}
 	if err := w.Err(); err != ErrAlreadyClosed {
@@ -322,57 +321,55 @@ func TestClosedQueue(t *testing.T) {
 }
 
 func TestValidationErrors(t *testing.T) {
-	client, err := Open(dsn, DisableAutoVacuum())
+	ctx := context.Background()
+	client, err := Open(ctx, setupPool(t), DisableAutoVacuum())
 	if err != nil {
 		t.Fatal("cannot open database connection:", err)
 	}
 	defer client.Close()
 	q := client.Queue("closed-client-queue")
 	defer q.Close()
-	if err := q.Push(bytes.Repeat([]byte("A"), DefaultMaxMessageLength+1)); err != ErrMessageTooLarge {
-		t.Error("expected ErrMessageTooLarge:", err)
-	}
-	if _, err := q.Reserve(0); err != ErrInvalidDuration {
+	if _, err := q.Reserve(ctx, 0); err != ErrInvalidDuration {
 		t.Error("expected ErrInvalidDuration:", err)
 	}
 	var m Message
-	if err := m.Touch(0); err != ErrInvalidDuration {
+	if err := m.Touch(ctx, 0); err != ErrInvalidDuration {
 		t.Error("expected ErrInvalidDuration:", err)
 	}
 }
 
 func TestWatchNextErrors(t *testing.T) {
-	t.Skip("flaky test")
-	client, err := Open(dsn, DisableAutoVacuum())
+	ctx := context.Background()
+	client, err := Open(ctx, setupPool(t), DisableAutoVacuum())
 	if err != nil {
 		t.Fatal("cannot open database connection:", err)
 	}
 	defer client.Close()
-	t.Run("close while next", func(t *testing.T) {
+	t.Run("closeWhileNext", func(t *testing.T) {
 		q := client.Queue("close while next")
 		w := q.Watch(1 * time.Second)
 		go func() {
 			time.Sleep(1 * time.Second)
 			q.Close()
 		}()
-		if w.Next() {
+		if w.Next(ctx) {
 			t.Error("unexpected first next=true while closing - should have detected close from Reserve")
 		}
-		if w.Next() {
+		if w.Next(ctx) {
 			t.Error("unexpected second next=true while closing - should have detected close from w.err")
 		}
 		if err := w.Err(); err != ErrAlreadyClosed {
 			t.Error("expected error not found:", err)
 		}
 	})
-	t.Run("next after close", func(t *testing.T) {
+	t.Run("nextAfterClose", func(t *testing.T) {
 		q := client.Queue("next after close")
 		w := q.Watch(1 * time.Second)
 		q.Close()
-		if w.Next() {
+		if w.Next(ctx) {
 			t.Error("unexpected first next=true after close - should have detected close from queue")
 		}
-		if w.Next() {
+		if w.Next(ctx) {
 			t.Error("unexpected second next=true after close - should have detected close from w.err")
 		}
 		if err := w.Err(); err != ErrAlreadyClosed {
@@ -382,14 +379,15 @@ func TestWatchNextErrors(t *testing.T) {
 }
 
 func TestCrossQueueBump(t *testing.T) {
+	ctx := context.Background()
 	var wg sync.WaitGroup
 	defer wg.Wait()
-	client, err := Open(dsn, DisableAutoVacuum())
+	client, err := Open(ctx, setupPool(t), DisableAutoVacuum())
 	if err != nil {
 		t.Fatal("cannot open database connection:", err)
 	}
 	defer client.Close()
-	if err := client.CreateTable(); err != nil {
+	if err := client.CreateTable(ctx); err != nil {
 		t.Fatal("cannot create queue table:", err)
 	}
 	qAlpha := client.Queue("cross-queue-bump-alpha")
@@ -401,10 +399,10 @@ func TestCrossQueueBump(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		alphaGotMessage <- watchAlpha.Next()
+		alphaGotMessage <- watchAlpha.Next(ctx)
 		t.Log("watchAlpha got a message")
 	}()
-	if err := qBravo.Push([]byte("message-bravo")); err != nil {
+	if err := qBravo.Push(ctx, []byte("message-bravo")); err != nil {
 		t.Fatal("cannot push message to qBravo:", err)
 	}
 	select {
@@ -413,9 +411,9 @@ func TestCrossQueueBump(t *testing.T) {
 		t.Logf("msg: %s", msg)
 		t.Fatal("wrong bump")
 	case <-time.After(missedNotificationFrequency):
-		t.Log("watchAlpa.Next() was not affected by a message dispatched to qBravo")
+		t.Log("watchAlpa.Next(ctx) was not affected by a message dispatched to qBravo")
 	}
-	if err := qAlpha.Push([]byte("message-alpha")); err != nil {
+	if err := qAlpha.Push(ctx, []byte("message-alpha")); err != nil {
 		t.Fatal("cannot push message to qAlpha:", err)
 	}
 	select {
@@ -432,37 +430,38 @@ func TestCrossQueueBump(t *testing.T) {
 }
 
 func TestSaturatedNotifications(t *testing.T) {
+	ctx := context.Background()
 	var wg sync.WaitGroup
 	defer wg.Wait()
-	client, err := Open(dsn, DisableAutoVacuum())
+	client, err := Open(ctx, setupPool(t), DisableAutoVacuum())
 	if err != nil {
 		t.Fatal("cannot open database connection:", err)
 	}
 	defer client.Close()
-	if err := client.CreateTable(); err != nil {
+	if err := client.CreateTable(ctx); err != nil {
 		t.Fatal("cannot create queue table:", err)
 	}
 	q := client.Queue("saturated-notifications")
 	defer q.Close()
 	// force Client.forwardNotifications to start dropping messages.
 	w := q.Watch(time.Minute)
-	if err := q.Push([]byte("message-1")); err != nil {
+	if err := q.Push(ctx, []byte("message-1")); err != nil {
 		t.Fatal("cannot push message (1) to the queue:", err)
 	}
-	if err := q.Push([]byte("message-2")); err != nil {
+	if err := q.Push(ctx, []byte("message-2")); err != nil {
 		t.Fatal("cannot push messages (2) to the queue:", err)
 	}
-	if !w.Next() {
-		t.Error("there are two messages in the queue, w.Next() must be true")
+	if !w.Next(ctx) {
+		t.Error("there are two messages in the queue, w.Next(ctx) must be true")
 	}
 	t.Logf("%s", w.Message().Content)
-	if !w.Next() {
-		t.Error("there is one message in the queue, w.Next() must be true")
+	if !w.Next(ctx) {
+		t.Error("there is one message in the queue, w.Next(ctx) must be true")
 	}
 	t.Logf("%s", w.Message().Content)
 	next := make(chan bool, 1)
 	go func() {
-		next <- w.Next()
+		next <- w.Next(ctx)
 	}()
 	time.Sleep(time.Second)
 	q.Close()
@@ -472,7 +471,8 @@ func TestSaturatedNotifications(t *testing.T) {
 }
 
 func TestAutoVacuum(t *testing.T) {
-	client, err := Open(dsn,
+	ctx := context.Background()
+	client, err := Open(ctx, setupPool(t),
 		WithMaxDeliveries(1),
 		WithCustomTable("queue-autovacuum"),
 	)
@@ -480,15 +480,15 @@ func TestAutoVacuum(t *testing.T) {
 		t.Fatal("cannot open database connection:", err)
 	}
 	defer client.Close()
-	if err := client.CreateTable(); err != nil {
+	if err := client.CreateTable(ctx); err != nil {
 		t.Fatal("cannot create queue table:", err)
 	}
 	q := client.Queue("queue")
 	defer q.Close()
-	if err := q.Push(nil); err != nil {
+	if err := q.Push(ctx, nil); err != nil {
 		t.Fatal("cannot push message:", err)
 	}
-	if _, err := q.Pop(); err != nil {
+	if _, err := q.Pop(ctx); err != nil {
 		t.Fatal("cannot pop message:", err)
 	}
 	time.Sleep(defaultVacuumFrequency * 3 / 2)
@@ -499,33 +499,33 @@ func TestAutoVacuum(t *testing.T) {
 }
 
 func TestDisableDeadletterQueue(t *testing.T) {
-	client, err := Open(dsn,
+	ctx := context.Background()
+	client, err := Open(ctx, setupPool(t),
 		WithMaxDeliveries(1),
 		DisableAutoVacuum(),
-		DisableDeadletterQueue(),
 	)
 	if err != nil {
 		t.Fatal("cannot open database connection:", err)
 	}
 	defer client.Close()
-	if err := client.CreateTable(); err != nil {
+	if err := client.CreateTable(ctx); err != nil {
 		t.Fatal("cannot create queue table:", err)
 	}
 	qName := fmt.Sprintf("disabled_dl_queue_%s", time.Now())
 	q := client.Queue(qName)
 	defer q.Close()
-	if err := q.Push([]byte("hello")); err != nil {
+	if err := q.Push(ctx, []byte("hello")); err != nil {
 		t.Fatal("cannot push message:", err)
 	}
-	if _, err := q.Reserve(1 * time.Second); err != nil {
+	if _, err := q.Reserve(ctx, 1*time.Second); err != nil {
 		t.Fatal("cannot reserve message:", err)
 	}
-	client.Vacuum()
+	client.Vacuum(ctx)
 	time.Sleep(2 * time.Second)
-	if err := client.DumpDeadLetterQueue(qName, nil); !errors.Is(err, ErrDeadletterQueueDisabled) {
+	if err := client.DumpDeadLetterQueue(ctx, qName, nil); !errors.Is(err, ErrDeadletterQueueDisabled) {
 		t.Fatal("expected error missing, got:", err)
 	}
-	if m, err := q.Reserve(1 * time.Second); !errors.Is(err, ErrEmptyQueue) {
+	if m, err := q.Reserve(ctx, 1*time.Second); !errors.Is(err, ErrEmptyQueue) {
 		t.Logf("m: %s", m.Content)
 		t.Fatal("queue should be empty:", err)
 	}
