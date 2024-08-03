@@ -44,6 +44,9 @@ var ErrAlreadyClosed = errors.New("queue is already closed")
 // than a millisecond and be multiple of a millisecond.
 var ErrInvalidDuration = errors.New("invalid duration")
 
+// ErrZeroSizedBulkOperation that the bulk operation size is zero.
+var ErrZeroSizedBulkOperation = errors.New("zero sized bulk operation")
+
 // ErrMessageExpired indicates the message deadline has been reached and the
 // current message pointer can no longer be used to update it.
 var ErrMessageExpired = errors.New("message expired")
@@ -550,19 +553,37 @@ func (q *Queue) ApproximateCount(ctx context.Context) (int, error) {
 }
 
 // Reserve retrieves the pending message from the queue, if any available. It
-// marks as it as InProgress until the defined lease duration. If the message
-// is not marked as Done by the lease time, it is returned to the queue. Lease
+// marks it as InProgress until the defined lease duration. If the message is
+// not marked as Done by the lease time, it is returned to the queue. Lease
 // duration must be multiple of milliseconds.
 func (q *Queue) Reserve(ctx context.Context, lease time.Duration) (*Message, error) {
+	msgs, err := q.ReserveN(ctx, lease, 1)
+	if err != nil {
+		return nil, err
+	}
+	if len(msgs) == 0 {
+		return nil, ErrEmptyQueue
+	}
+	return msgs[0], nil
+}
+
+// ReserveN retrieves a batch of pending messages from the queue, if any
+// available. It marks them as InProgress until the defined lease duration. If
+// the message is not marked as Done by the lease time, it is returned to the
+// queue. Lease duration must be multiple of milliseconds.
+func (q *Queue) ReserveN(ctx context.Context, lease time.Duration, n uint) ([]*Message, error) {
 	if q.isClosed() {
 		return nil, ErrAlreadyClosed
+	}
+	if n == 0 {
+		return nil, ErrZeroSizedBulkOperation
 	}
 	if err := validDuration(lease); err != nil {
 		return nil, err
 	}
-	var msg *Message
+	var msgs []*Message
 	err := q.client.acquireConnDo(ctx, func(conn *nonCancelableConn) error {
-		row := conn.QueryRow(ctx, `
+		rows, err := conn.Query(ctx, `
 			UPDATE `+quoteIdentifier(q.client.tableName)+`
 			SET
 				rvn = nextval(`+q.client.seqName+`),
@@ -580,47 +601,67 @@ func (q *Queue) Reserve(ctx context.Context, lease time.Duration) (*Message, err
 						AND state = $4
 					ORDER BY
 						id ASC
-					LIMIT 1
+					LIMIT `+fmt.Sprint(n)+`
 					FOR UPDATE SKIP LOCKED
 				)
 			RETURNING id, content, leased_until, rvn
 		`, InProgress, lease.String(), q.queue, New)
+		if err != nil {
+			return fmt.Errorf("cannot reserve messages: %w", err)
+		}
 		var (
 			id          uint64
 			content     []byte
 			leasedUntil time.Time
 			rvn         int64
 		)
-		if err := row.Scan(&id, &content, &leasedUntil, &rvn); err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("cannot reserve message: %w", err)
-		} else if errors.Is(err, pgx.ErrNoRows) {
-			return ErrEmptyQueue
+		defer rows.Close()
+		for rows.Next() {
+			if err := rows.Scan(&id, &content, &leasedUntil, &rvn); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				return fmt.Errorf("cannot reserve message: %w", err)
+			} else if errors.Is(err, pgx.ErrNoRows) {
+				return ErrEmptyQueue
+			}
+			msgs = append(msgs, &Message{
+				id:          id,
+				Content:     content,
+				LeasedUntil: leasedUntil,
+				client:      q.client,
+				rvn:         rvn,
+			})
 		}
-		msg = &Message{
-			id:          id,
-			Content:     content,
-			LeasedUntil: leasedUntil,
-			client:      q.client,
-			rvn:         rvn,
-		}
-		return nil
+		return rows.Err()
 	})
-	return msg, err
+	return msgs, err
 
 }
 
 // Push enqueues the given content to the target queue.
 func (q *Queue) Push(ctx context.Context, content []byte) error {
+	return q.PushN(ctx, [][]byte{content})
+}
+
+// Push enqueues the given content batch to the target queue.
+func (q *Queue) PushN(ctx context.Context, contents [][]byte) error {
 	if q.isClosed() {
 		return ErrAlreadyClosed
+	}
+	if len(contents) == 0 {
+		return ErrZeroSizedBulkOperation
 	}
 	return q.client.acquireConnDo(ctx, func(conn *nonCancelableConn) error {
 		queueName, err := conn.EscapeString(q.queue)
 		if err != nil {
 			return fmt.Errorf("cannot escape queue name: %w", err)
 		}
-		if _, err := conn.Exec(ctx, `INSERT INTO `+quoteIdentifier(q.client.tableName)+` (queue, state, content) VALUES ($1, $2, $3)`, q.queue, New, content); err != nil {
-			return fmt.Errorf("cannot store message: %w", err)
+		_, err = conn.CopyFrom(ctx,
+			pgx.Identifier{q.client.tableName},
+			[]string{"queue", "state", "content"},
+			pgx.CopyFromSlice(len(contents), func(i int) ([]any, error) {
+				return []any{q.queue, New, contents[i]}, nil
+			}))
+		if err != nil {
+			return fmt.Errorf("cannot store messages: %w", err)
 		}
 		if _, err := conn.Exec(ctx, `NOTIFY `+quoteIdentifier(q.client.tableName)+`, '`+queueName+`'`); err != nil {
 			return fmt.Errorf("cannot send push notification: %w", err)
@@ -632,12 +673,28 @@ func (q *Queue) Push(ctx context.Context, content []byte) error {
 // Pop retrieves the pending message from the queue, if any available. If the
 // queue is empty, it returns ErrEmptyQueue.
 func (q *Queue) Pop(ctx context.Context) ([]byte, error) {
+	msgs, err := q.PopN(ctx, 1)
+	if err != nil {
+		return nil, err
+	}
+	if len(msgs) == 0 {
+		return nil, ErrEmptyQueue
+	}
+	return msgs[0], nil
+}
+
+// Pop retrieves a batch pending message from the queue, if any available. If
+// the queue is empty, it returns ErrEmptyQueue.
+func (q *Queue) PopN(ctx context.Context, n uint) ([][]byte, error) {
 	if q.isClosed() {
 		return nil, ErrAlreadyClosed
 	}
-	var content []byte
+	if n == 0 {
+		return nil, ErrZeroSizedBulkOperation
+	}
+	var contents [][]byte
 	err := q.client.acquireConnDo(ctx, func(conn *nonCancelableConn) error {
-		row := conn.QueryRow(ctx, `
+		rows, err := conn.Query(ctx, `
 			UPDATE `+quoteIdentifier(q.client.tableName)+`
 			SET
 				rvn = nextval(`+q.client.seqName+`),
@@ -654,19 +711,27 @@ func (q *Queue) Pop(ctx context.Context) ([]byte, error) {
 						AND state = $3
 					ORDER BY
 						id ASC
-					LIMIT 1
+					LIMIT `+fmt.Sprint(n)+`
 					FOR UPDATE SKIP LOCKED
 				)
 			RETURNING content
 		`, Done, q.queue, New)
-		if err := row.Scan(&content); err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("cannot pop message: %w", err)
-		} else if errors.Is(err, pgx.ErrNoRows) {
-			return ErrEmptyQueue
+		if err != nil {
+			return fmt.Errorf("cannot pop messages: %w", err)
 		}
-		return nil
+		defer rows.Close()
+		for rows.Next() {
+			var content []byte
+			if err := rows.Scan(&content); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				return fmt.Errorf("cannot pop message: %w", err)
+			} else if errors.Is(err, pgx.ErrNoRows) {
+				return ErrEmptyQueue
+			}
+			contents = append(contents, content)
+		}
+		return rows.Err()
 	})
-	return content, err
+	return contents, err
 }
 
 // Close closes the queue.
@@ -901,4 +966,8 @@ func (c *nonCancelableConn) QueryRow(ctx context.Context, sql string, args ...an
 
 func (c *nonCancelableConn) EscapeString(s string) (string, error) {
 	return c.conn.Conn().PgConn().EscapeString(s)
+}
+
+func (c *nonCancelableConn) CopyFrom(ctx context.Context, tableName pgx.Identifier, columnNames []string, rowSrc pgx.CopyFromSource) (int64, error) {
+	return c.conn.CopyFrom(ctx, tableName, columnNames, rowSrc)
 }

@@ -572,3 +572,17 @@ func TestQueueApproximateCount(t *testing.T) {
 		t.Fatalf("unexpected approximate message count: %d", count)
 	}
 }
+
+func TestErrZeroSizedBulkOperation(t *testing.T) {
+	ctx := context.Background()
+	queue := &Queue{}
+	if err := queue.PushN(ctx, nil); !errors.Is(err, ErrZeroSizedBulkOperation) {
+		t.Fatalf("expected error missing (PushN): %v", err)
+	}
+	if _, err := queue.ReserveN(ctx, 1*time.Second, 0); !errors.Is(err, ErrZeroSizedBulkOperation) {
+		t.Fatalf("expected error missing (ReserveN): %v", err)
+	}
+	if _, err := queue.PopN(ctx, 0); !errors.Is(err, ErrZeroSizedBulkOperation) {
+		t.Fatalf("expected error missing (PopN): %v", err)
+	}
+}
