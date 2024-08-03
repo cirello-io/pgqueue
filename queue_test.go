@@ -530,3 +530,45 @@ func TestDisableDeadletterQueue(t *testing.T) {
 		t.Fatal("queue should be empty:", err)
 	}
 }
+
+func TestQueueApproximateCount(t *testing.T) {
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("cannot open database connection pool: %v", err)
+	}
+	client, err := Open(ctx, pool)
+	if err != nil {
+		t.Fatalf("cannot create queue handler: %v", err)
+	}
+	defer client.Close()
+	if err := client.CreateTable(ctx); err != nil {
+		t.Fatalf("cannot create queue table: %v", err)
+	}
+	qName := fmt.Sprintf("queue-approximate-message-count-%s", time.Now())
+	queue := client.Queue(qName)
+	defer queue.Close()
+	const (
+		pushedCount          = 10000
+		reservedCount        = 100
+		expectedMessageCount = pushedCount - reservedCount
+	)
+	for i := 0; i < pushedCount; i++ {
+		content := []byte("content")
+		if err := queue.Push(ctx, content); err != nil {
+			t.Fatalf("cannot push message to queue: %v", err)
+		}
+	}
+	for i := 0; i < reservedCount; i++ {
+		if _, err := queue.Reserve(ctx, 1*time.Minute); err != nil {
+			t.Fatalf("cannot reserve message from queue: %v", err)
+		}
+	}
+	count, err := queue.ApproximateCount(ctx)
+	if err != nil {
+		t.Fatalf("cannot get approximate message count: %v", err)
+	}
+	if count != expectedMessageCount {
+		t.Fatalf("unexpected approximate message count: %d", count)
+	}
+}

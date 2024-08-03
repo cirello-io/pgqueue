@@ -524,6 +524,31 @@ func (q *Queue) Watch(lease time.Duration) *Watcher {
 	return w
 }
 
+// ApproximateCount reports how many messages are available in the queue, for
+// popping. It will skip messages that are currently being processed or stale.
+func (q *Queue) ApproximateCount(ctx context.Context) (int, error) {
+	if q.isClosed() {
+		return 0, ErrAlreadyClosed
+	}
+	var count int
+	err := q.client.acquireConnDo(ctx, func(conn *nonCancelableConn) error {
+		row := conn.QueryRow(ctx, `
+			SELECT
+				COUNT(*)
+			FROM
+				`+quoteIdentifier(q.client.tableName)+`
+			WHERE
+				queue = $1
+				AND state = $2
+		`, q.queue, New)
+		if err := row.Scan(&count); err != nil {
+			return fmt.Errorf("cannot count messages: %w", err)
+		}
+		return nil
+	})
+	return count, err
+}
+
 // Reserve retrieves the pending message from the queue, if any available. It
 // marks as it as InProgress until the defined lease duration. If the message
 // is not marked as Done by the lease time, it is returned to the queue. Lease
