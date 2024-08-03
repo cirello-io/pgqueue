@@ -14,30 +14,30 @@
 // Package pgqueue is a library allows to use a single PostgreSQL instance as a
 // queue server.
 //
-//	pool, err := pgxpool.New(context.Background(), dsn)
+//	pool, err := pgxpool.New(ctx, dsn)
 //	if err != nil {
-//	    log.Fatalln("cannot open database connection pool:", err)
+//		log.Fatalln("cannot open database connection pool:", err)
 //	}
-//	client, err := pgqueue.Open(dsn)
+//	client, err := pgqueue.Open(ctx, pool)
 //	if err != nil {
-//	    log.Fatalln("cannot open database connection:", err)
+//		log.Fatalln("cannot create queue handler:", err)
 //	}
 //	defer client.Close()
-//	if err := client.CreateTable(); err != nil {
-//	    log.Fatalln("cannot create queue table:", err)
+//	if err := client.CreateTable(ctx); err != nil {
+//		log.Fatalln("cannot create queue table:", err)
 //	}
 //	queue := client.Queue("example-queue-reservation")
 //	defer queue.Close()
 //	content := []byte("content")
-//	if err := queue.Push(content); err != nil {
-//	    log.Fatalln("cannot push message to queue:", err)
+//	if err := queue.Push(ctx, content); err != nil {
+//		log.Fatalln("cannot push message to queue:", err)
 //	}
-//	r, err := queue.Reserve(1 * time.Minute)
+//	r, err := queue.Reserve(ctx, 1*time.Minute)
 //	if err != nil {
-//	    log.Fatalln("cannot reserve message from the queue:", err)
+//		log.Fatalln("cannot reserve message from the queue:", err)
 //	}
 //	fmt.Printf("content: %s\n", r.Content)
-//	if err := r.Done(); err != nil {
-//	    log.Fatalln("cannot mark message as done:", err)
+//	if err := r.Done(ctx); err != nil {
+//		log.Fatalln("cannot mark message as done:", err)
 //	}
 package pgqueue
