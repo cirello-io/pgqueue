@@ -330,23 +330,27 @@ func (c *Client) DumpDeadLetterQueue(ctx context.Context, queue string, w io.Wri
 	})
 }
 
+func (c *Client) renderCreateTable() string {
+	return `
+CREATE SEQUENCE IF NOT EXISTS ` + quoteIdentifier(c.tableName+"_rvn") + ` AS BIGINT CYCLE;
+CREATE TABLE IF NOT EXISTS ` + quoteIdentifier(c.tableName) + ` (
+	id BIGSERIAL PRIMARY KEY,
+	rvn BIGINT DEFAULT nextval(` + c.seqName + `),
+	queue VARCHAR,
+	state VARCHAR,
+	deliveries INT NOT NULL DEFAULT 0,
+	leased_until TIMESTAMP WITHOUT TIME ZONE,
+	content BYTEA
+);
+CREATE INDEX IF NOT EXISTS ` + quoteIdentifier(c.tableName+"_pop") + ` ON ` + quoteIdentifier(c.tableName) + ` (queue, state);
+CREATE INDEX IF NOT EXISTS ` + quoteIdentifier(c.tableName+"_vacuum") + ` ON ` + quoteIdentifier(c.tableName) + ` (queue, state, deliveries, leased_until);
+`
+}
+
 // CreateTable prepares the underlying table for the queue system.
 func (c *Client) CreateTable(ctx context.Context) error {
 	return c.acquireConnDo(ctx, func(conn *nonCancelableConn) error {
-		_, err := conn.Exec(ctx, `
-			CREATE SEQUENCE IF NOT EXISTS `+quoteIdentifier(c.tableName+"_rvn")+` AS BIGINT CYCLE;
-			CREATE TABLE IF NOT EXISTS `+quoteIdentifier(c.tableName)+` (
-				id BIGSERIAL PRIMARY KEY,
-				rvn BIGINT DEFAULT nextval(`+c.seqName+`),
-				queue VARCHAR,
-				state VARCHAR,
-				deliveries INT NOT NULL DEFAULT 0,
-				leased_until TIMESTAMP WITHOUT TIME ZONE,
-				content BYTEA
-			);
-			CREATE INDEX IF NOT EXISTS `+quoteIdentifier(c.tableName+"_pop")+` ON `+quoteIdentifier(c.tableName)+` (queue, state);
-			CREATE INDEX IF NOT EXISTS `+quoteIdentifier(c.tableName+"_vacuum")+` ON `+quoteIdentifier(c.tableName)+` (queue, state, deliveries, leased_until);
-		`)
+		_, err := conn.Exec(ctx, c.renderCreateTable())
 		if err != nil {
 			return fmt.Errorf("cannot create table: %w", err)
 		}
