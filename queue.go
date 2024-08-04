@@ -554,7 +554,7 @@ func (q *Queue) ApproximateCount(ctx context.Context) (int, error) {
 	err := q.client.acquireConnDo(ctx, func(conn *nonCancelableConn) error {
 		row := conn.QueryRow(ctx, `
 			SELECT
-				COUNT(*)
+				COUNT(id)
 			FROM
 				`+quoteIdentifier(q.client.tableName)+`
 			WHERE
