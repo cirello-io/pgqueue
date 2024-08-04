@@ -24,7 +24,6 @@ import (
 
 func BenchmarkThroughput(b *testing.B) {
 	ctx := context.Background()
-	msg := bytes.Repeat([]byte("A"), 65536)
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		b.Fatal("cannot open database connection pool:", err)
@@ -37,63 +36,126 @@ func BenchmarkThroughput(b *testing.B) {
 	if err := client.CreateTable(ctx); err != nil {
 		b.Fatal("cannot create queue table:", err)
 	}
+	msg := bytes.Repeat([]byte("A"), 65536)
 	b.Run("push", func(b *testing.B) {
+		msgs := make([][]byte, b.N)
+		for i := range msgs {
+			msgs[i] = msg
+		}
+		b.SetBytes(int64(len(msg)))
+		b.ResetTimer()
 		queue := client.Queue("queue-benchmark-push")
 		defer queue.Close()
-		for i := 0; i < b.N; i++ {
+		for _, msg := range msgs {
 			if err := queue.Push(ctx, msg); err != nil {
 				b.Fatal("cannot push message:", err)
 			}
-			b.SetBytes(int64(len(msg)))
+		}
+	})
+	b.Run("pushN", func(b *testing.B) {
+		msgs := make([][]byte, b.N)
+		for i := range msgs {
+			msgs[i] = msg
+		}
+		b.SetBytes(int64(len(msg)))
+		b.ResetTimer()
+		queue := client.Queue("queue-benchmark-push-n")
+		defer queue.Close()
+		if err := queue.PushN(ctx, msgs); err != nil {
+			b.Fatal("cannot push message:", err)
 		}
 	})
 	b.Run("pop", func(b *testing.B) {
+		msgs := make([][]byte, b.N)
+		for i := range msgs {
+			msgs[i] = msg
+		}
 		queue := client.Queue("queue-benchmark-pop")
 		defer queue.Close()
-		for i := 0; i < b.N; i++ {
-			if err := queue.Push(ctx, msg); err != nil {
-				b.Fatal("cannot push message:", err)
-			}
+		if err := queue.PushN(ctx, msgs); err != nil {
+			b.Fatal("cannot push messages:", err)
 		}
+		b.SetBytes(int64(len(msg)))
 		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for range msgs {
 			if _, err := queue.Pop(ctx); err != nil {
 				b.Fatal("cannot pop message:", err)
 			}
-			b.SetBytes(int64(len(msg)))
 		}
 	})
-	b.Run("pushPop", func(b *testing.B) {
-		queue := client.Queue("queue-benchmark-pushPop")
-		defer queue.Close()
-		for i := 0; i < b.N; i++ {
-			if err := queue.Push(ctx, msg); err != nil {
-				b.Fatal("cannot push message:", err)
-			}
-			b.SetBytes(int64(len(msg)))
+	b.Run("popN", func(b *testing.B) {
+		msgs := make([][]byte, b.N)
+		for i := range msgs {
+			msgs[i] = msg
 		}
-		for i := 0; i < b.N; i++ {
-			if _, err := queue.Pop(ctx); err != nil {
-				b.Fatal("cannot pop message:", err)
-			}
-			b.SetBytes(int64(len(msg)))
+		queue := client.Queue("queue-benchmark-pop-n")
+		defer queue.Close()
+		if err := queue.PushN(ctx, msgs); err != nil {
+			b.Fatal("cannot push messages:", err)
+		}
+		b.SetBytes(int64(len(msg)))
+		b.ResetTimer()
+		if _, err := queue.PopN(ctx, len(msgs)); err != nil {
+			b.Fatal("cannot pop message:", err)
+		}
+	})
+	b.Run("pushNPopN", func(b *testing.B) {
+		msgs := make([][]byte, b.N)
+		for i := range msgs {
+			msgs[i] = msg
+		}
+		queue := client.Queue("queue-benchmark-push-n-pop-n")
+		defer queue.Close()
+		b.SetBytes(2 * int64(len(msg)))
+		b.ResetTimer()
+		if err := queue.PushN(ctx, msgs); err != nil {
+			b.Fatal("cannot push messages:", err)
+		}
+		if _, err := queue.PopN(ctx, len(msgs)); err != nil {
+			b.Fatal("cannot pop message:", err)
 		}
 	})
 	b.Run("pushReserveDone", func(b *testing.B) {
+		msgs := make([][]byte, b.N)
+		for i := range msgs {
+			msgs[i] = msg
+		}
 		queue := client.Queue("queue-benchmark-pushReserveDone")
 		defer queue.Close()
+		b.SetBytes(2 * int64(len(msg)))
+		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			if err := queue.Push(ctx, msg); err != nil {
 				b.Fatal("cannot push message:", err)
 			}
-			b.SetBytes(int64(len(msg)))
 		}
 		for i := 0; i < b.N; i++ {
 			msg, err := queue.Reserve(ctx, time.Minute)
 			if err != nil {
 				b.Fatal("cannot reserve message:", err)
 			}
-			b.SetBytes(int64(len(msg.Content)))
+			if err := msg.Done(ctx); err != nil {
+				b.Fatalf("cannot mark message (%d) as done: %s", msg.id, err)
+			}
+		}
+	})
+	b.Run("pushNReserveNDone", func(b *testing.B) {
+		msgs := make([][]byte, b.N)
+		for i := range msgs {
+			msgs[i] = msg
+		}
+		queue := client.Queue("queue-benchmark-pushReserveDone")
+		defer queue.Close()
+		b.SetBytes(2 * int64(len(msg)))
+		b.ResetTimer()
+		if err := queue.PushN(ctx, msgs); err != nil {
+			b.Fatal("cannot push messages:", err)
+		}
+		reservedMessages, err := queue.ReserveN(ctx, time.Minute, len(msgs))
+		if err != nil {
+			b.Fatal("cannot reserve message:", err)
+		}
+		for _, msg := range reservedMessages {
 			if err := msg.Done(ctx); err != nil {
 				b.Fatalf("cannot mark message (%d) as done: %s", msg.id, err)
 			}
