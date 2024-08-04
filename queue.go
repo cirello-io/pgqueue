@@ -200,22 +200,12 @@ func (c *Client) runAutoVacuum(ctx context.Context) {
 	}
 }
 
-func (c *Client) add(q *Queue) {
+func (c *Client) remove(queue *Queue) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.knownQueues = append(c.knownQueues, q)
-}
-
-func (c *Client) remove(q *Queue) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	var knownQueues []*Queue
-	for _, knownQueue := range c.knownQueues {
-		if knownQueue != q {
-			knownQueues = append(knownQueues, q)
-		}
-	}
-	c.knownQueues = knownQueues
+	c.knownQueues = slices.DeleteFunc(c.knownQueues, func(q *Queue) bool {
+		return q.name == queue.name
+	})
 }
 
 func (c *Client) subscribe(sub chan struct{}, queue string) {
@@ -279,14 +269,22 @@ func (c *Client) Close() error {
 }
 
 // Queue configures a queue.
-func (c *Client) Queue(queue string) *Queue {
+func (c *Client) Queue(name string) *Queue {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	idx := slices.IndexFunc(c.knownQueues, func(q *Queue) bool {
+		return q.name == name
+	})
+	if idx >= 0 {
+		return c.knownQueues[idx]
+	}
 	q := &Queue{
 		client:      c,
-		queue:       queue,
+		name:        name,
 		closed:      make(chan struct{}),
 		keepOnError: c.keepOnError,
 	}
-	c.add(q)
+	c.knownQueues = append(c.knownQueues, q)
 	return q
 }
 
@@ -409,7 +407,7 @@ func (c *Client) vacuum(ctx context.Context, q *Queue) (stats VacuumStats) {
 					LIMIT CASE WHEN $3 < 0 THEN 0 ELSE $3 END
 					FOR UPDATE SKIP LOCKED
 				)
-		`, q.queue, Done, c.vacuumCurrentPageSize)
+		`, q.name, Done, c.vacuumCurrentPageSize)
 		if err != nil {
 			return fmt.Errorf("cannot store message: %w", err)
 		}
@@ -436,7 +434,7 @@ func (c *Client) vacuum(ctx context.Context, q *Queue) (stats VacuumStats) {
 					LIMIT CASE WHEN $5 < 0 THEN 0 ELSE $5 END
 					FOR UPDATE SKIP LOCKED
 				)
-		`, New, q.queue, InProgress, c.queueMaxDeliveries, c.vacuumCurrentPageSize)
+		`, New, q.name, InProgress, c.queueMaxDeliveries, c.vacuumCurrentPageSize)
 		if err != nil {
 			return fmt.Errorf("cannot recover messages: %w", err)
 		}
@@ -458,7 +456,7 @@ func (c *Client) vacuum(ctx context.Context, q *Queue) (stats VacuumStats) {
 						LIMIT CASE WHEN $4 < 0 THEN 0 ELSE $4 END
 						FOR UPDATE SKIP LOCKED
 					)
-			`, q.queue, InProgress, c.queueMaxDeliveries, c.vacuumCurrentPageSize)
+			`, q.name, InProgress, c.queueMaxDeliveries, c.vacuumCurrentPageSize)
 			if err != nil {
 				return fmt.Errorf("cannot delete errored message from the queue: %w", err)
 			}
@@ -483,7 +481,7 @@ func (c *Client) vacuum(ctx context.Context, q *Queue) (stats VacuumStats) {
 						LIMIT CASE WHEN $5 < 0 THEN 0 ELSE $5 END
 						FOR UPDATE SKIP LOCKED
 					)
-			`, DefaultDeadLetterQueueNamePrefix+"-"+q.queue, q.queue, InProgress, c.queueMaxDeliveries, c.vacuumCurrentPageSize)
+			`, DefaultDeadLetterQueueNamePrefix+"-"+q.name, q.name, InProgress, c.queueMaxDeliveries, c.vacuumCurrentPageSize)
 			if err != nil {
 				return fmt.Errorf("cannot move message to dead letter queue: %w", err)
 			}
@@ -503,7 +501,7 @@ func (c *Client) vacuum(ctx context.Context, q *Queue) (stats VacuumStats) {
 type Queue struct {
 	client *Client
 
-	queue     string
+	name      string
 	closeOnce sync.Once
 	closed    chan struct{}
 
@@ -527,7 +525,7 @@ func (q *Queue) Watch(lease time.Duration) *Watcher {
 		notifications: make(chan struct{}, 1),
 		lease:         lease,
 	}
-	q.client.subscribe(w.notifications, q.queue)
+	q.client.subscribe(w.notifications, q.name)
 	return w
 }
 
@@ -547,7 +545,7 @@ func (q *Queue) ApproximateCount(ctx context.Context) (int, error) {
 			WHERE
 				queue = $1
 				AND state = $2
-		`, q.queue, New)
+		`, q.name, New)
 		if err := row.Scan(&count); err != nil {
 			return fmt.Errorf("cannot count messages: %w", err)
 		}
@@ -609,7 +607,7 @@ func (q *Queue) ReserveN(ctx context.Context, lease time.Duration, n int) ([]*Me
 					FOR UPDATE SKIP LOCKED
 				)
 			RETURNING id, content, leased_until, rvn
-		`, InProgress, lease.String(), q.queue, New)
+		`, InProgress, lease.String(), q.name, New)
 		if err != nil {
 			return fmt.Errorf("cannot reserve messages: %w", err)
 		}
@@ -654,7 +652,7 @@ func (q *Queue) PushN(ctx context.Context, contents [][]byte) error {
 		return ErrZeroSizedBulkOperation
 	}
 	return q.client.acquireConnDo(ctx, func(conn *nonCancelableConn) error {
-		queueName, err := conn.EscapeString(q.queue)
+		queueName, err := conn.EscapeString(q.name)
 		if err != nil {
 			return fmt.Errorf("cannot escape queue name: %w", err)
 		}
@@ -662,7 +660,7 @@ func (q *Queue) PushN(ctx context.Context, contents [][]byte) error {
 			pgx.Identifier{q.client.tableName},
 			[]string{"queue", "state", "content"},
 			pgx.CopyFromSlice(len(contents), func(i int) ([]any, error) {
-				return []any{q.queue, New, contents[i]}, nil
+				return []any{q.name, New, contents[i]}, nil
 			}))
 		if err != nil {
 			return fmt.Errorf("cannot store messages: %w", err)
@@ -719,7 +717,7 @@ func (q *Queue) PopN(ctx context.Context, n int) ([][]byte, error) {
 					FOR UPDATE SKIP LOCKED
 				)
 			RETURNING content
-		`, Done, q.queue, New)
+		`, Done, q.name, New)
 		if err != nil {
 			return fmt.Errorf("cannot pop messages: %w", err)
 		}

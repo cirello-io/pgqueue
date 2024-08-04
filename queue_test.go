@@ -589,3 +589,17 @@ func TestErrZeroSizedBulkOperation(t *testing.T) {
 		t.Fatalf("expected error missing (PopN): %v", err)
 	}
 }
+
+func TestDuplicatedQueuePointer(t *testing.T) {
+	ctx := context.Background()
+	client, err := Open(ctx, setupPool(t))
+	if err != nil {
+		t.Fatalf("cannot open database connection: %v", err)
+	}
+	defer client.Close()
+	q := client.Queue("duplicated-queue-pointer")
+	q2 := client.Queue("duplicated-queue-pointer")
+	if q != q2 {
+		t.Fatalf("expected the same pointer, got %p and %p", q, q2)
+	}
+}
