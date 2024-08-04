@@ -120,7 +120,7 @@ func BenchmarkThroughput(b *testing.B) {
 		for i := range msgs {
 			msgs[i] = msg
 		}
-		queue := client.Queue("queue-benchmark-pushReserveDone")
+		queue := client.Queue("queue-benchmark-push-reserve-done")
 		defer queue.Close()
 		b.SetBytes(2 * int64(len(msg)))
 		b.ResetTimer()
@@ -144,7 +144,7 @@ func BenchmarkThroughput(b *testing.B) {
 		for i := range msgs {
 			msgs[i] = msg
 		}
-		queue := client.Queue("queue-benchmark-pushReserveDone")
+		queue := client.Queue("queue-benchmark-push-n-reserve-n-done")
 		defer queue.Close()
 		b.SetBytes(2 * int64(len(msg)))
 		b.ResetTimer()
