@@ -23,6 +23,7 @@ func TestValidateSchemaSQL(t *testing.T) {
 	t.Parallel()
 	c := &Client{
 		tableName: defaultTableName,
+		seqName:   "'" + defaultTableName + "_rvn'",
 	}
 	current, err := os.ReadFile("schema.sql")
 	if err != nil {
