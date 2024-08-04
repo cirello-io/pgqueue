@@ -178,6 +178,7 @@ func TestDeadletterDump(t *testing.T) {
 		WithMaxDeliveries(2),
 		DisableAutoVacuum(),
 		EnableDeadletterQueue(),
+		WithCustomTable("deadletter-dump"),
 	)
 	if err != nil {
 		t.Fatal("cannot open database connection:", err)
@@ -283,7 +284,7 @@ func TestReconfiguredClient(t *testing.T) {
 func TestCloseError(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	client, err := Open(ctx, setupPool(t))
+	client, err := Open(ctx, setupPool(t), WithCustomTable("close-error"))
 	if err != nil {
 		t.Fatal("cannot open database connection:", err)
 	}
@@ -300,7 +301,7 @@ func TestCloseError(t *testing.T) {
 func TestClosedQueue(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	client, err := Open(ctx, setupPool(t))
+	client, err := Open(ctx, setupPool(t), WithCustomTable("closed-queue"))
 	if err != nil {
 		t.Fatal("cannot open database connection:", err)
 	}
@@ -331,7 +332,7 @@ func TestClosedQueue(t *testing.T) {
 func TestValidationErrors(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	client, err := Open(ctx, setupPool(t), DisableAutoVacuum())
+	client, err := Open(ctx, setupPool(t), WithCustomTable("validation-errors"), DisableAutoVacuum())
 	if err != nil {
 		t.Fatal("cannot open database connection:", err)
 	}
@@ -350,7 +351,7 @@ func TestValidationErrors(t *testing.T) {
 func TestWatchNextErrors(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	client, err := Open(ctx, setupPool(t), DisableAutoVacuum())
+	client, err := Open(ctx, setupPool(t), WithCustomTable("watch-next-errors"), DisableAutoVacuum())
 	if err != nil {
 		t.Fatal("cannot open database connection:", err)
 	}
@@ -396,7 +397,7 @@ func TestCrossQueueBump(t *testing.T) {
 	ctx := context.Background()
 	var wg sync.WaitGroup
 	defer wg.Wait()
-	client, err := Open(ctx, setupPool(t), DisableAutoVacuum())
+	client, err := Open(ctx, setupPool(t), WithCustomTable("cross-queue-bump"), DisableAutoVacuum())
 	if err != nil {
 		t.Fatal("cannot open database connection:", err)
 	}
@@ -448,7 +449,7 @@ func TestSaturatedNotifications(t *testing.T) {
 	ctx := context.Background()
 	var wg sync.WaitGroup
 	defer wg.Wait()
-	client, err := Open(ctx, setupPool(t), DisableAutoVacuum())
+	client, err := Open(ctx, setupPool(t), WithCustomTable("saturated-notifications"), DisableAutoVacuum())
 	if err != nil {
 		t.Fatal("cannot open database connection:", err)
 	}
@@ -520,6 +521,7 @@ func TestDisableDeadletterQueue(t *testing.T) {
 	client, err := Open(ctx, setupPool(t),
 		WithMaxDeliveries(1),
 		DisableAutoVacuum(),
+		WithCustomTable("disable-deadletter-queue"),
 	)
 	if err != nil {
 		t.Fatal("cannot open database connection:", err)
@@ -555,7 +557,7 @@ func TestQueueApproximateCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cannot open database connection pool: %v", err)
 	}
-	client, err := Open(ctx, pool)
+	client, err := Open(ctx, pool, WithCustomTable("queue-approximate-count"))
 	if err != nil {
 		t.Fatalf("cannot create queue handler: %v", err)
 	}
@@ -609,7 +611,7 @@ func TestErrZeroSizedBulkOperation(t *testing.T) {
 func TestDuplicatedQueuePointer(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	client, err := Open(ctx, setupPool(t))
+	client, err := Open(ctx, setupPool(t), WithCustomTable("duplicated-queue-pointer"))
 	if err != nil {
 		t.Fatalf("cannot open database connection: %v", err)
 	}
