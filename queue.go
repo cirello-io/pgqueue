@@ -336,7 +336,7 @@ func (c *Client) CreateTable(ctx context.Context) error {
 		_, err := conn.Exec(ctx, `
 			CREATE SEQUENCE IF NOT EXISTS `+quoteIdentifier(c.tableName+"_rvn")+` AS BIGINT CYCLE;
 			CREATE TABLE IF NOT EXISTS `+quoteIdentifier(c.tableName)+` (
-				id SERIAL PRIMARY KEY,
+				id BIGSERIAL PRIMARY KEY,
 				rvn BIGINT DEFAULT nextval(`+c.seqName+`),
 				queue VARCHAR,
 				state VARCHAR,
