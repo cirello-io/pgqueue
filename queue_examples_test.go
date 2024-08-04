@@ -157,13 +157,45 @@ func Example_reservedReleased() {
 	if err := queue.Push(ctx, content); err != nil {
 		log.Fatalln("cannot push message to queue:", err)
 	}
-	r, err := queue.Reserve(ctx, 1*time.Minute)
+	msg, err := queue.Reserve(ctx, 1*time.Minute)
 	if err != nil {
 		log.Fatalln("cannot pop message from the queue:", err)
 	}
-	fmt.Printf("content: %s\n", r.Content)
-	if err := r.Release(ctx); err != nil {
+	fmt.Printf("content: %s\n", msg.Content)
+	if err := msg.Release(ctx); err != nil {
 		log.Fatalln("cannot release the message back to the queue:", err)
+	}
+	// Output:
+	// content: content
+}
+
+func Example_reservedReleasedDeleted() {
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		log.Fatalln("cannot open database connection pool:", err)
+	}
+	client, err := pgqueue.Open(ctx, pool)
+	if err != nil {
+		log.Fatalln("cannot create queue handler:", err)
+	}
+	defer client.Close()
+	if err := client.CreateTable(ctx); err != nil {
+		log.Fatalln("cannot create queue table:", err)
+	}
+	queue := client.Queue("example-queue-release")
+	defer queue.Close()
+	content := []byte("content")
+	if err := queue.Push(ctx, content); err != nil {
+		log.Fatalln("cannot push message to queue:", err)
+	}
+	msg, err := queue.Reserve(ctx, 1*time.Minute)
+	if err != nil {
+		log.Fatalln("cannot pop message from the queue:", err)
+	}
+	fmt.Printf("content: %s\n", msg.Content)
+	if err := queue.Delete(ctx, msg.ID()); err != nil {
+		log.Fatalln("cannot remove the message from the queue:", err)
 	}
 	// Output:
 	// content: content
