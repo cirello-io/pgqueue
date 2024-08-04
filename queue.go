@@ -268,26 +268,6 @@ func (c *Client) Close() error {
 	return err
 }
 
-// Queue configures a queue.
-func (c *Client) Queue(name string) *Queue {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	idx := slices.IndexFunc(c.knownQueues, func(q *Queue) bool {
-		return q.name == name
-	})
-	if idx >= 0 {
-		return c.knownQueues[idx]
-	}
-	q := &Queue{
-		client:      c,
-		name:        name,
-		closed:      make(chan struct{}),
-		keepOnError: c.keepOnError,
-	}
-	c.knownQueues = append(c.knownQueues, q)
-	return q
-}
-
 // DumpDeadLetterQueue writes the messages into the writer and remove them from
 // the database.
 func (c *Client) DumpDeadLetterQueue(ctx context.Context, queue string, w io.Writer) error {
@@ -509,6 +489,37 @@ type Queue struct {
 	vacuumStats   VacuumStats
 
 	keepOnError bool
+}
+
+// Queue configures a queue.
+func (c *Client) Queue(name string) *Queue {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	idx := slices.IndexFunc(c.knownQueues, func(q *Queue) bool {
+		return q.name == name
+	})
+	if idx >= 0 {
+		return c.knownQueues[idx]
+	}
+	q := &Queue{
+		client:      c,
+		name:        name,
+		closed:      make(chan struct{}),
+		keepOnError: c.keepOnError,
+	}
+	c.knownQueues = append(c.knownQueues, q)
+	return q
+}
+
+// Close closes the queue.
+func (q *Queue) Close() error {
+	err := ErrAlreadyClosed
+	q.closeOnce.Do(func() {
+		close(q.closed)
+		err = nil
+		q.client.remove(q)
+	})
+	return err
 }
 
 // VacuumStats reports the result of the last vacuum cycle.
@@ -755,17 +766,6 @@ func (q *Queue) DeleteN(ctx context.Context, ids []uint64) error {
 		}
 		return nil
 	})
-}
-
-// Close closes the queue.
-func (q *Queue) Close() error {
-	err := ErrAlreadyClosed
-	q.closeOnce.Do(func() {
-		close(q.closed)
-		err = nil
-		q.client.remove(q)
-	})
-	return err
 }
 
 func (q *Queue) isClosed() bool {

@@ -20,6 +20,7 @@ import (
 )
 
 func TestValidateSchemaSQL(t *testing.T) {
+	t.Parallel()
 	c := &Client{
 		tableName: defaultTableName,
 	}

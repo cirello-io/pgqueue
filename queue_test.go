@@ -40,6 +40,7 @@ func setupPool(t *testing.T) *pgxpool.Pool {
 
 func TestOverload(t *testing.T) {
 	t.Run("popPush", func(t *testing.T) {
+		t.Parallel()
 		ctx := context.Background()
 		client, err := Open(ctx, setupPool(t), WithCustomTable("overloadpoppush"), DisableAutoVacuum())
 		if err != nil {
@@ -100,6 +101,7 @@ func TestOverload(t *testing.T) {
 		}
 	})
 	t.Run("popReserveDone", func(t *testing.T) {
+		t.Parallel()
 		ctx := context.Background()
 		client, err := Open(ctx, setupPool(t), WithCustomTable("overloadpopreservedone"), DisableAutoVacuum())
 		if err != nil {
@@ -169,6 +171,7 @@ func (w *badWriter) Write([]byte) (int, error) {
 }
 
 func TestDeadletterDump(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	const reservationTime = 500 * time.Millisecond
 	client, err := Open(ctx, setupPool(t),
@@ -236,7 +239,9 @@ func TestDeadletterDump(t *testing.T) {
 }
 
 func TestReconfiguredClient(t *testing.T) {
+	t.Parallel()
 	t.Run("customTable", func(t *testing.T) {
+		t.Parallel()
 		ctx := context.Background()
 		client, err := Open(ctx, setupPool(t), WithCustomTable("queue2"))
 		if err != nil {
@@ -261,6 +266,7 @@ func TestReconfiguredClient(t *testing.T) {
 		}
 	})
 	t.Run("badListener", func(t *testing.T) {
+		t.Parallel()
 		ctx := context.Background()
 		client, err := Open(ctx, setupPool(t), func(c *Client) {
 			// sabotage the client during setup
@@ -275,6 +281,7 @@ func TestReconfiguredClient(t *testing.T) {
 }
 
 func TestCloseError(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	client, err := Open(ctx, setupPool(t))
 	if err != nil {
@@ -291,6 +298,7 @@ func TestCloseError(t *testing.T) {
 }
 
 func TestClosedQueue(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	client, err := Open(ctx, setupPool(t))
 	if err != nil {
@@ -321,6 +329,7 @@ func TestClosedQueue(t *testing.T) {
 }
 
 func TestValidationErrors(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	client, err := Open(ctx, setupPool(t), DisableAutoVacuum())
 	if err != nil {
@@ -339,6 +348,7 @@ func TestValidationErrors(t *testing.T) {
 }
 
 func TestWatchNextErrors(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	client, err := Open(ctx, setupPool(t), DisableAutoVacuum())
 	if err != nil {
@@ -382,6 +392,7 @@ func TestWatchNextErrors(t *testing.T) {
 }
 
 func TestCrossQueueBump(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	var wg sync.WaitGroup
 	defer wg.Wait()
@@ -433,6 +444,7 @@ func TestCrossQueueBump(t *testing.T) {
 }
 
 func TestSaturatedNotifications(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	var wg sync.WaitGroup
 	defer wg.Wait()
@@ -474,6 +486,7 @@ func TestSaturatedNotifications(t *testing.T) {
 }
 
 func TestAutoVacuum(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	client, err := Open(ctx, setupPool(t),
 		WithMaxDeliveries(1),
@@ -502,6 +515,7 @@ func TestAutoVacuum(t *testing.T) {
 }
 
 func TestDisableDeadletterQueue(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	client, err := Open(ctx, setupPool(t),
 		WithMaxDeliveries(1),
@@ -535,6 +549,7 @@ func TestDisableDeadletterQueue(t *testing.T) {
 }
 
 func TestQueueApproximateCount(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
@@ -577,6 +592,7 @@ func TestQueueApproximateCount(t *testing.T) {
 }
 
 func TestErrZeroSizedBulkOperation(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	queue := &Queue{}
 	if err := queue.PushN(ctx, nil); !errors.Is(err, ErrZeroSizedBulkOperation) {
@@ -591,6 +607,7 @@ func TestErrZeroSizedBulkOperation(t *testing.T) {
 }
 
 func TestDuplicatedQueuePointer(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	client, err := Open(ctx, setupPool(t))
 	if err != nil {
