@@ -372,6 +372,10 @@ func (c *Client) Vacuum(ctx context.Context) {
 
 func (c *Client) vacuum(ctx context.Context, q *Queue) (stats VacuumStats) {
 	err := c.acquireConnDo(ctx, func(conn *nonCancelableConn) error {
+		vacuumCurrentPageSize := c.vacuumCurrentPageSize
+		if vacuumCurrentPageSize < 0 {
+			vacuumCurrentPageSize = 0
+		}
 		_, err := conn.Exec(ctx, `
 			DELETE FROM
 				`+quoteIdentifier(c.tableName)+`
@@ -384,10 +388,10 @@ func (c *Client) vacuum(ctx context.Context, q *Queue) (stats VacuumStats) {
 					WHERE
 						queue = $1
 						AND state = $2
-					LIMIT CASE WHEN $3 < 0 THEN 0 ELSE $3 END
+					LIMIT $3
 					FOR UPDATE SKIP LOCKED
 				)
-		`, q.name, Done, c.vacuumCurrentPageSize)
+		`, q.name, Done, vacuumCurrentPageSize)
 		if err != nil {
 			return fmt.Errorf("cannot store message: %w", err)
 		}
@@ -411,10 +415,10 @@ func (c *Client) vacuum(ctx context.Context, q *Queue) (stats VacuumStats) {
 						AND state = $3
 						AND deliveries < $4
 						AND leased_until < NOW()
-					LIMIT CASE WHEN $5 < 0 THEN 0 ELSE $5 END
+					LIMIT $5
 					FOR UPDATE SKIP LOCKED
 				)
-		`, New, q.name, InProgress, c.queueMaxDeliveries, c.vacuumCurrentPageSize)
+		`, New, q.name, InProgress, c.queueMaxDeliveries, vacuumCurrentPageSize)
 		if err != nil {
 			return fmt.Errorf("cannot recover messages: %w", err)
 		}
@@ -433,10 +437,10 @@ func (c *Client) vacuum(ctx context.Context, q *Queue) (stats VacuumStats) {
 							AND state = $2
 							AND deliveries >= $3
 							AND leased_until < NOW()
-						LIMIT CASE WHEN $4 < 0 THEN 0 ELSE $4 END
+						LIMIT $4
 						FOR UPDATE SKIP LOCKED
 					)
-			`, q.name, InProgress, c.queueMaxDeliveries, c.vacuumCurrentPageSize)
+			`, q.name, InProgress, c.queueMaxDeliveries, vacuumCurrentPageSize)
 			if err != nil {
 				return fmt.Errorf("cannot delete errored message from the queue: %w", err)
 			}
@@ -458,10 +462,10 @@ func (c *Client) vacuum(ctx context.Context, q *Queue) (stats VacuumStats) {
 							AND state = $3
 							AND deliveries >= $4
 							AND leased_until < NOW()
-						LIMIT CASE WHEN $5 < 0 THEN 0 ELSE $5 END
+						LIMIT $5
 						FOR UPDATE SKIP LOCKED
 					)
-			`, DefaultDeadLetterQueueNamePrefix+"-"+q.name, q.name, InProgress, c.queueMaxDeliveries, c.vacuumCurrentPageSize)
+			`, DefaultDeadLetterQueueNamePrefix+"-"+q.name, q.name, InProgress, c.queueMaxDeliveries, vacuumCurrentPageSize)
 			if err != nil {
 				return fmt.Errorf("cannot move message to dead letter queue: %w", err)
 			}
