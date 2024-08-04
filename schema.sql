@@ -1,7 +1,5 @@
-CREATE SEQUENCE IF NOT EXISTS "queue_rvn" AS BIGINT CYCLE;
 CREATE TABLE IF NOT EXISTS "queue" (
 	id BIGSERIAL PRIMARY KEY,
-	rvn BIGINT DEFAULT nextval('queue_rvn'),
 	queue VARCHAR,
 	state VARCHAR,
 	deliveries INT NOT NULL DEFAULT 0,

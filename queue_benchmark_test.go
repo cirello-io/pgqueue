@@ -44,10 +44,9 @@ func BenchmarkThroughput(b *testing.B) {
 		}
 		b.SetBytes(int64(len(msg)))
 		b.ResetTimer()
-		queue := client.Queue("queue-benchmark-push")
-		defer queue.Close()
+		queueName := "queue-benchmark-push"
 		for _, msg := range msgs {
-			if err := queue.Push(ctx, msg); err != nil {
+			if err := client.Push(ctx, queueName, msg); err != nil {
 				b.Fatal("cannot push message:", err)
 			}
 		}
@@ -59,9 +58,8 @@ func BenchmarkThroughput(b *testing.B) {
 		}
 		b.SetBytes(int64(len(msg)))
 		b.ResetTimer()
-		queue := client.Queue("queue-benchmark-push-n")
-		defer queue.Close()
-		if err := queue.PushN(ctx, msgs); err != nil {
+		queueName := "queue-benchmark-push-n"
+		if err := client.PushN(ctx, queueName, msgs); err != nil {
 			b.Fatal("cannot push message:", err)
 		}
 	})
@@ -70,15 +68,14 @@ func BenchmarkThroughput(b *testing.B) {
 		for i := range msgs {
 			msgs[i] = msg
 		}
-		queue := client.Queue("queue-benchmark-pop")
-		defer queue.Close()
-		if err := queue.PushN(ctx, msgs); err != nil {
+		queueName := "queue-benchmark-pop"
+		if err := client.PushN(ctx, queueName, msgs); err != nil {
 			b.Fatal("cannot push messages:", err)
 		}
 		b.SetBytes(int64(len(msg)))
 		b.ResetTimer()
 		for range msgs {
-			if _, err := queue.Pop(ctx); err != nil {
+			if _, err := client.Pop(ctx, queueName); err != nil {
 				b.Fatal("cannot pop message:", err)
 			}
 		}
@@ -88,14 +85,13 @@ func BenchmarkThroughput(b *testing.B) {
 		for i := range msgs {
 			msgs[i] = msg
 		}
-		queue := client.Queue("queue-benchmark-pop-n")
-		defer queue.Close()
-		if err := queue.PushN(ctx, msgs); err != nil {
+		queueName := "queue-benchmark-pop-n"
+		if err := client.PushN(ctx, queueName, msgs); err != nil {
 			b.Fatal("cannot push messages:", err)
 		}
 		b.SetBytes(int64(len(msg)))
 		b.ResetTimer()
-		if _, err := queue.PopN(ctx, len(msgs)); err != nil {
+		if _, err := client.PopN(ctx, queueName, len(msgs)); err != nil {
 			b.Fatal("cannot pop message:", err)
 		}
 	})
@@ -104,61 +100,14 @@ func BenchmarkThroughput(b *testing.B) {
 		for i := range msgs {
 			msgs[i] = msg
 		}
-		queue := client.Queue("queue-benchmark-push-n-pop-n")
-		defer queue.Close()
+		queueName := "queue-benchmark-push-n-pop-n"
 		b.SetBytes(2 * int64(len(msg)))
 		b.ResetTimer()
-		if err := queue.PushN(ctx, msgs); err != nil {
+		if err := client.PushN(ctx, queueName, msgs); err != nil {
 			b.Fatal("cannot push messages:", err)
 		}
-		if _, err := queue.PopN(ctx, len(msgs)); err != nil {
+		if _, err := client.PopN(ctx, queueName, len(msgs)); err != nil {
 			b.Fatal("cannot pop message:", err)
-		}
-	})
-	b.Run("pushReserveDone", func(b *testing.B) {
-		msgs := make([][]byte, b.N)
-		for i := range msgs {
-			msgs[i] = msg
-		}
-		queue := client.Queue("queue-benchmark-push-reserve-done")
-		defer queue.Close()
-		b.SetBytes(2 * int64(len(msg)))
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			if err := queue.Push(ctx, msg); err != nil {
-				b.Fatal("cannot push message:", err)
-			}
-		}
-		for i := 0; i < b.N; i++ {
-			msg, err := queue.Reserve(ctx, time.Minute)
-			if err != nil {
-				b.Fatal("cannot reserve message:", err)
-			}
-			if err := msg.Done(ctx); err != nil {
-				b.Fatalf("cannot mark message (%d) as done: %s", msg.id, err)
-			}
-		}
-	})
-	b.Run("pushNReserveNDone", func(b *testing.B) {
-		msgs := make([][]byte, b.N)
-		for i := range msgs {
-			msgs[i] = msg
-		}
-		queue := client.Queue("queue-benchmark-push-n-reserve-n-done")
-		defer queue.Close()
-		b.SetBytes(2 * int64(len(msg)))
-		b.ResetTimer()
-		if err := queue.PushN(ctx, msgs); err != nil {
-			b.Fatal("cannot push messages:", err)
-		}
-		reservedMessages, err := queue.ReserveN(ctx, time.Minute, len(msgs))
-		if err != nil {
-			b.Fatal("cannot reserve message:", err)
-		}
-		for _, msg := range reservedMessages {
-			if err := msg.Done(ctx); err != nil {
-				b.Fatalf("cannot mark message (%d) as done: %s", msg.id, err)
-			}
 		}
 	})
 	b.Run("pushNReserveNDelete", func(b *testing.B) {
@@ -166,19 +115,18 @@ func BenchmarkThroughput(b *testing.B) {
 		for i := range msgs {
 			msgs[i] = msg
 		}
-		queue := client.Queue("queue-benchmark-push-n-reserve-n-delete")
-		defer queue.Close()
+		queueName := "queue-benchmark-push-n-reserve-n-delete"
 		b.SetBytes(2 * int64(len(msg)))
 		b.ResetTimer()
-		if err := queue.PushN(ctx, msgs); err != nil {
+		if err := client.PushN(ctx, queueName, msgs); err != nil {
 			b.Fatal("cannot push messages:", err)
 		}
-		reservedMessages, err := queue.ReserveN(ctx, time.Minute, len(msgs))
+		reservedMessages, err := client.ReserveN(ctx, queueName, time.Minute, len(msgs))
 		if err != nil {
 			b.Fatal("cannot reserve message:", err)
 		}
 		for _, msg := range reservedMessages {
-			if err := queue.Delete(ctx, msg.ID()); err != nil {
+			if err := client.Delete(ctx, msg.ID()); err != nil {
 				b.Fatalf("cannot delete message (%d) as done: %s", msg.ID(), err)
 			}
 		}
@@ -188,14 +136,13 @@ func BenchmarkThroughput(b *testing.B) {
 		for i := range msgs {
 			msgs[i] = msg
 		}
-		queue := client.Queue("queue-benchmark-push-n-reserve-n-delete-n")
-		defer queue.Close()
+		queueName := "queue-benchmark-push-n-reserve-n-delete-n"
 		b.SetBytes(2 * int64(len(msg)))
 		b.ResetTimer()
-		if err := queue.PushN(ctx, msgs); err != nil {
+		if err := client.PushN(ctx, queueName, msgs); err != nil {
 			b.Fatal("cannot push messages:", err)
 		}
-		reservedMessages, err := queue.ReserveN(ctx, time.Minute, len(msgs))
+		reservedMessages, err := client.ReserveN(ctx, queueName, time.Minute, len(msgs))
 		if err != nil {
 			b.Fatal("cannot reserve message:", err)
 		}
@@ -203,7 +150,7 @@ func BenchmarkThroughput(b *testing.B) {
 		for i, msg := range reservedMessages {
 			ids[i] = msg.ID()
 		}
-		if err := queue.DeleteN(ctx, ids); err != nil {
+		if err := client.DeleteN(ctx, ids); err != nil {
 			b.Fatal("cannot delete messages:", err)
 		}
 	})

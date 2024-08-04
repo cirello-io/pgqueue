@@ -14,6 +14,7 @@
 package pgqueue
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -32,7 +33,7 @@ func Test_validDuration(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if gotErr := validDuration(tt.args.d); gotErr != tt.wantErr {
+			if gotErr := validDuration(tt.args.d); !errors.Is(gotErr, tt.wantErr) {
 				t.Errorf("validDuration() = %v, want %v", gotErr, tt.wantErr)
 			}
 		})

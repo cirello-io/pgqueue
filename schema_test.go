@@ -21,10 +21,7 @@ import (
 
 func TestValidateSchemaSQL(t *testing.T) {
 	t.Parallel()
-	c := &Client{
-		tableName: defaultTableName,
-		seqName:   "'" + defaultTableName + "_rvn'",
-	}
+	c := &Client{tableName: defaultTableName}
 	current, err := os.ReadFile("schema.sql")
 	if err != nil {
 		t.Fatalf("cannot read schema.sql: %v", err)
