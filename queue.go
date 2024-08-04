@@ -734,6 +734,27 @@ func (q *Queue) PopN(ctx context.Context, n int) ([][]byte, error) {
 	return contents, err
 }
 
+// Delete removes the message from the queue.
+func (q *Queue) Delete(ctx context.Context, id uint64) error {
+	return q.DeleteN(ctx, []uint64{id})
+}
+
+// DeleteN removes the messages from the queue.
+func (q *Queue) DeleteN(ctx context.Context, ids []uint64) error {
+	return q.client.acquireConnDo(ctx, func(conn *nonCancelableConn) error {
+		_, err := conn.Exec(ctx, `
+			DELETE FROM
+				`+quoteIdentifier(q.client.tableName)+`
+			WHERE
+				id = ANY($1)
+		`, ids)
+		if err != nil {
+			return fmt.Errorf("cannot delete messages: %w", err)
+		}
+		return nil
+	})
+}
+
 // Close closes the queue.
 func (q *Queue) Close() error {
 	err := ErrAlreadyClosed
@@ -824,6 +845,11 @@ type Message struct {
 	LeasedUntil time.Time
 	rvn         int64
 	client      *Client
+}
+
+// ID returns the unique identifier of the message.
+func (m *Message) ID() uint64 {
+	return m.id
 }
 
 // Done mark message as done.

@@ -161,4 +161,50 @@ func BenchmarkThroughput(b *testing.B) {
 			}
 		}
 	})
+	b.Run("pushNReserveNDelete", func(b *testing.B) {
+		msgs := make([][]byte, b.N)
+		for i := range msgs {
+			msgs[i] = msg
+		}
+		queue := client.Queue("queue-benchmark-push-n-reserve-n-delete")
+		defer queue.Close()
+		b.SetBytes(2 * int64(len(msg)))
+		b.ResetTimer()
+		if err := queue.PushN(ctx, msgs); err != nil {
+			b.Fatal("cannot push messages:", err)
+		}
+		reservedMessages, err := queue.ReserveN(ctx, time.Minute, len(msgs))
+		if err != nil {
+			b.Fatal("cannot reserve message:", err)
+		}
+		for _, msg := range reservedMessages {
+			if err := queue.Delete(ctx, msg.ID()); err != nil {
+				b.Fatalf("cannot delete message (%d) as done: %s", msg.ID(), err)
+			}
+		}
+	})
+	b.Run("pushNReserveNDeleteN", func(b *testing.B) {
+		msgs := make([][]byte, b.N)
+		for i := range msgs {
+			msgs[i] = msg
+		}
+		queue := client.Queue("queue-benchmark-push-n-reserve-n-delete-n")
+		defer queue.Close()
+		b.SetBytes(2 * int64(len(msg)))
+		b.ResetTimer()
+		if err := queue.PushN(ctx, msgs); err != nil {
+			b.Fatal("cannot push messages:", err)
+		}
+		reservedMessages, err := queue.ReserveN(ctx, time.Minute, len(msgs))
+		if err != nil {
+			b.Fatal("cannot reserve message:", err)
+		}
+		ids := make([]uint64, len(reservedMessages))
+		for i, msg := range reservedMessages {
+			ids[i] = msg.ID()
+		}
+		if err := queue.DeleteN(ctx, ids); err != nil {
+			b.Fatal("cannot delete messages:", err)
+		}
+	})
 }
