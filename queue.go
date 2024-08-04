@@ -571,11 +571,11 @@ func (q *Queue) Reserve(ctx context.Context, lease time.Duration) (*Message, err
 // available. It marks them as InProgress until the defined lease duration. If
 // the message is not marked as Done by the lease time, it is returned to the
 // queue. Lease duration must be multiple of milliseconds.
-func (q *Queue) ReserveN(ctx context.Context, lease time.Duration, n uint) ([]*Message, error) {
+func (q *Queue) ReserveN(ctx context.Context, lease time.Duration, n int) ([]*Message, error) {
 	if q.isClosed() {
 		return nil, ErrAlreadyClosed
 	}
-	if n == 0 {
+	if n <= 0 {
 		return nil, ErrZeroSizedBulkOperation
 	}
 	if err := validDuration(lease); err != nil {
@@ -685,11 +685,11 @@ func (q *Queue) Pop(ctx context.Context) ([]byte, error) {
 
 // Pop retrieves a batch pending message from the queue, if any available. If
 // the queue is empty, it returns ErrEmptyQueue.
-func (q *Queue) PopN(ctx context.Context, n uint) ([][]byte, error) {
+func (q *Queue) PopN(ctx context.Context, n int) ([][]byte, error) {
 	if q.isClosed() {
 		return nil, ErrAlreadyClosed
 	}
-	if n == 0 {
+	if n <= 0 {
 		return nil, ErrZeroSizedBulkOperation
 	}
 	var contents [][]byte
