@@ -77,7 +77,7 @@ const (
 // Client uses a postgreSQL database to run a queue system.
 type Client struct {
 	tableName          string
-	pool               PgxConn
+	conn               PgxConn
 	queueMaxDeliveries int
 	keepOnError        bool
 
@@ -126,10 +126,10 @@ func EnableDeadLetterQueue() ClientOption {
 }
 
 // Open uses the given database connection and start operating the queue system.
-func Open(pool PgxConn, opts ...ClientOption) *Client {
+func Open(conn PgxConn, opts ...ClientOption) *Client {
 	c := &Client{
 		tableName: defaultTableName,
-		pool:      pool,
+		conn:      conn,
 
 		vacuumTickerFreq:   defaultVacuumFrequency,
 		queueMaxDeliveries: DefaultMaxDeliveriesCount,
@@ -240,7 +240,7 @@ func (c *Client) DumpDeadLetterQueue(ctx context.Context, queue string, n int) (
 		if err := rows.Err(); err != nil {
 			return fmt.Errorf("cannot read dead messages: %w", err)
 		}
-		if _, err := c.pool.Exec(ctx, `DELETE FROM `+quoteIdentifier(c.tableName)+` WHERE id = ANY($1)`, ids); err != nil {
+		if _, err := c.conn.Exec(ctx, `DELETE FROM `+quoteIdentifier(c.tableName)+` WHERE id = ANY($1)`, ids); err != nil {
 			return fmt.Errorf("cannot delete dead messages: %w", err)
 		}
 		return nil
@@ -364,7 +364,7 @@ func (c *Client) Vacuum(ctx context.Context) VacuumStats {
 func (c *Client) vacuum(ctx context.Context) (stats VacuumStats) {
 	stats.LastRun = time.Now()
 	stats.PageSize = vacuumPageSize
-	res, err := c.pool.Exec(ctx, `
+	res, err := c.conn.Exec(ctx, `
 			DELETE FROM
 				`+quoteIdentifier(c.tableName)+`
 			WHERE
@@ -387,7 +387,7 @@ func (c *Client) vacuum(ctx context.Context) (stats VacuumStats) {
 	if c.queueMaxDeliveries == 0 {
 		return stats
 	}
-	_, err = c.pool.Exec(ctx, `
+	_, err = c.conn.Exec(ctx, `
 			UPDATE
 				`+quoteIdentifier(c.tableName)+`
 			SET
@@ -412,7 +412,7 @@ func (c *Client) vacuum(ctx context.Context) (stats VacuumStats) {
 	}
 	stats.RestoreStaleCount = res.RowsAffected()
 	if !c.keepOnError {
-		_, err := c.pool.Exec(ctx, `
+		_, err := c.conn.Exec(ctx, `
 				DELETE FROM
 					`+quoteIdentifier(c.tableName)+`
 				WHERE
@@ -435,7 +435,7 @@ func (c *Client) vacuum(ctx context.Context) (stats VacuumStats) {
 		}
 		stats.BadMessagesDeleteCount = res.RowsAffected()
 	} else {
-		res, err := c.pool.Exec(ctx, `
+		res, err := c.conn.Exec(ctx, `
 				UPDATE
 					`+quoteIdentifier(c.tableName)+`
 				SET
@@ -461,7 +461,7 @@ func (c *Client) vacuum(ctx context.Context) (stats VacuumStats) {
 		}
 		stats.DeadLetterQueueCount = res.RowsAffected()
 	}
-	if _, err := c.pool.Exec(ctx, "VACUUM (SKIP_LOCKED true) "+quoteIdentifier(c.tableName)); err != nil {
+	if _, err := c.conn.Exec(ctx, "VACUUM (SKIP_LOCKED true) "+quoteIdentifier(c.tableName)); err != nil {
 		stats.ErrTableVacuum = fmt.Errorf("cannot vacuum table %q: %w", c.tableName, err)
 		return stats
 	}

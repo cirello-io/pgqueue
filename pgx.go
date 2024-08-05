@@ -34,7 +34,7 @@ func quoteIdentifier(s string) string {
 
 // connDo executes a function with a non-cancelable context.
 func (c *Client) connDo(f func(*nonCancelableConn) error) error {
-	return f(&nonCancelableConn{c.pool})
+	return f(&nonCancelableConn{c.conn})
 }
 
 type nonCancelableConn struct {
