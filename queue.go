@@ -529,9 +529,6 @@ func (c *Client) Reserve(ctx context.Context, queueName string, lease time.Durat
 	if err != nil {
 		return nil, err
 	}
-	if len(msgs) == 0 {
-		return nil, ErrEmptyQueue
-	}
 	return msgs[0], nil
 }
 
@@ -596,7 +593,13 @@ func (c *Client) ReserveN(ctx context.Context, queueName string, lease time.Dura
 		}
 		return rows.Err()
 	})
-	return msgs, err
+	if err != nil {
+		return nil, err
+	}
+	if len(msgs) == 0 {
+		return nil, ErrEmptyQueue
+	}
+	return msgs, nil
 
 }
 
@@ -684,14 +687,11 @@ func (c *Client) ExtendN(ctx context.Context, ids []uint64, extension time.Durat
 // Pop retrieves the pending message from the queue, if any available. If the
 // queue is empty, it returns ErrEmptyQueue.
 func (c *Client) Pop(ctx context.Context, queueName string) ([]byte, error) {
-	msgs, err := c.PopN(ctx, queueName, 1)
+	contents, err := c.PopN(ctx, queueName, 1)
 	if err != nil {
 		return nil, err
 	}
-	if len(msgs) == 0 {
-		return nil, ErrEmptyQueue
-	}
-	return msgs[0], nil
+	return contents[0], nil
 }
 
 // Pop retrieves a batch pending message from the queue, if any available. If
@@ -739,7 +739,13 @@ func (c *Client) PopN(ctx context.Context, queueName string, n int) ([][]byte, e
 		}
 		return rows.Err()
 	})
-	return contents, err
+	if err != nil {
+		return nil, err
+	}
+	if len(contents) == 0 {
+		return nil, ErrEmptyQueue
+	}
+	return contents, nil
 }
 
 // Delete removes the message from the queue.
