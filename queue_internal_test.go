@@ -59,3 +59,20 @@ func TestClient_CreateTable_errors(t *testing.T) {
 		t.Fatal("unexpected error:", err)
 	}
 }
+
+func TestClient_ApproximateCount_errors(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	errExpected := errors.New("mock error")
+	mock.ExpectQuery("SELECT COUNT").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnError(errExpected)
+	ctx := context.Background()
+	client, err := Open(ctx, mock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ApproximateCount(ctx, "queue"); !errors.Is(err, errExpected) {
+		t.Fatal("unexpected error:", err)
+	}
+}
