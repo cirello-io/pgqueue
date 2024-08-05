@@ -52,7 +52,7 @@ func TestOverload(t *testing.T) {
 		client.Vacuum(ctx)
 		t.Log("zeroing the queue")
 		for {
-			if _, err := client.Pop(ctx, queueName); errors.Is(err, ErrEmptyQueue) {
+			if _, err := client.Pop(ctx, queueName, 1); errors.Is(err, ErrEmptyQueue) {
 				break
 			} else if err != nil {
 				t.Fatal("cannot zero queue before overload test:", err)
@@ -75,7 +75,7 @@ func TestOverload(t *testing.T) {
 		for i := 0; i < 10; i++ {
 			g.Go(func() error {
 				for {
-					_, err := client.Pop(ctx, queueName)
+					_, err := client.Pop(ctx, queueName, 1)
 					if errors.Is(err, ErrEmptyQueue) {
 						return nil
 					} else if err != nil {
@@ -108,7 +108,7 @@ func TestOverload(t *testing.T) {
 		client.Vacuum(ctx)
 		t.Log("zeroing the queue")
 		for {
-			if _, err := client.Pop(ctx, queueName); errors.Is(err, ErrEmptyQueue) {
+			if _, err := client.Pop(ctx, queueName, 1000); errors.Is(err, ErrEmptyQueue) {
 				break
 			} else if err != nil {
 				t.Fatal("cannot zero queue before overload test:", err)
@@ -131,14 +131,14 @@ func TestOverload(t *testing.T) {
 		for i := 0; i < 10; i++ {
 			g.Go(func() error {
 				for {
-					m, err := client.Reserve(ctx, queueName, 5*time.Minute)
+					m, err := client.Reserve(ctx, queueName, 5*time.Minute, 1)
 					if errors.Is(err, ErrEmptyQueue) {
 						return nil
 					} else if err != nil {
 						t.Log(err)
 						return err
 					}
-					if err := client.Delete(ctx, m.ID()); err != nil {
+					if err := client.Delete(ctx, m[0].ID()); err != nil {
 						t.Log(err)
 						return err
 					}
@@ -185,12 +185,12 @@ func TestDeadLetterDump(t *testing.T) {
 		if err := client.Push(ctx, queueName, expectedMessage); err != nil {
 			t.Fatal("cannot push message to queue:", err)
 		}
-		if _, err := client.Reserve(ctx, queueName, reservationTime); err != nil {
+		if _, err := client.Reserve(ctx, queueName, reservationTime, 1); err != nil {
 			t.Fatal("cannot reserve message from the queue (try):", err)
 		}
 		time.Sleep(2 * reservationTime)
 		client.Vacuum(ctx)
-		if _, err := client.Reserve(ctx, queueName, reservationTime); err != nil {
+		if _, err := client.Reserve(ctx, queueName, reservationTime, 1); err != nil {
 			t.Fatal("cannot reserve message from the queue (retry):", err)
 		}
 		time.Sleep(2 * reservationTime)
@@ -229,12 +229,12 @@ func TestDeadLetterDump(t *testing.T) {
 		if err := client.Push(ctx, queueName, expectedMessage); err != nil {
 			t.Fatal("cannot push message to queue:", err)
 		}
-		if _, err := client.Reserve(ctx, queueName, reservationTime); err != nil {
+		if _, err := client.Reserve(ctx, queueName, reservationTime, 1); err != nil {
 			t.Fatal("cannot reserve message from the queue (try):", err)
 		}
 		time.Sleep(2 * reservationTime)
 		client.Vacuum(ctx)
-		if _, err := client.Reserve(ctx, queueName, reservationTime); err != nil {
+		if _, err := client.Reserve(ctx, queueName, reservationTime, 1); err != nil {
 			t.Fatal("cannot reserve message from the queue (retry):", err)
 		}
 		time.Sleep(2 * reservationTime)
@@ -282,11 +282,11 @@ func TestReconfiguredClient(t *testing.T) {
 		if err := client.Push(ctx, queueName, expectedContent); err != nil {
 			t.Fatal("cannot push message to queue:", err)
 		}
-		poppedContent, err := client.Pop(ctx, queueName)
+		poppedContent, err := client.Pop(ctx, queueName, 1)
 		if err != nil {
 			t.Fatal("cannot pop message from the queue:", err)
 		}
-		if !bytes.Equal(poppedContent, expectedContent) {
+		if !bytes.Equal(poppedContent[0], expectedContent) {
 			t.Errorf("unexpected output: %s", poppedContent)
 		}
 	})
@@ -314,7 +314,7 @@ func TestValidationErrors(t *testing.T) {
 		t.Fatal("cannot create queue table:", err)
 	}
 	queueName := "closed-client-queue"
-	if _, err := client.Reserve(ctx, queueName, 0); !errors.Is(err, ErrInvalidDuration) {
+	if _, err := client.Reserve(ctx, queueName, 0, 1); !errors.Is(err, ErrInvalidDuration) {
 		t.Error("expected ErrInvalidDuration:", err)
 	}
 	if err := client.Extend(ctx, 0, 0); !errors.Is(err, ErrInvalidDuration) {
@@ -338,7 +338,7 @@ func TestDisableDeadLetterQueue(t *testing.T) {
 	if err := client.Push(ctx, queueName, []byte("hello")); err != nil {
 		t.Fatal("cannot push message:", err)
 	}
-	if _, err := client.Reserve(ctx, queueName, 1*time.Second); err != nil {
+	if _, err := client.Reserve(ctx, queueName, 1*time.Second, 1); err != nil {
 		t.Fatal("cannot reserve message:", err)
 	}
 	client.Vacuum(ctx)
@@ -346,8 +346,8 @@ func TestDisableDeadLetterQueue(t *testing.T) {
 	if _, err := client.DumpDeadLetterQueue(ctx, queueName, 1); !errors.Is(err, ErrDeadLetterQueueDisabled) {
 		t.Fatal("expected error missing, got:", err)
 	}
-	if m, err := client.Reserve(ctx, queueName, 1*time.Second); !errors.Is(err, ErrEmptyQueue) {
-		t.Logf("m: %s", m.Content())
+	if m, err := client.Reserve(ctx, queueName, 1*time.Second, 1); !errors.Is(err, ErrEmptyQueue) {
+		t.Logf("m: %s", m[0].Content())
 		t.Fatal("queue should be empty:", err)
 	}
 }
@@ -376,10 +376,8 @@ func TestQueueApproximateCount(t *testing.T) {
 				t.Fatalf("cannot push message to queue: %v", err)
 			}
 		}
-		for i := 0; i < reservedCount; i++ {
-			if _, err := client.Reserve(ctx, queueName, 1*time.Minute); err != nil {
-				t.Fatalf("cannot reserve message from queue: %v", err)
-			}
+		if _, err := client.Reserve(ctx, queueName, 1*time.Minute, reservedCount); err != nil {
+			t.Fatalf("cannot reserve message from queue: %v", err)
 		}
 		count, err := client.ApproximateCount(ctx, queueName)
 		if err != nil {
@@ -420,14 +418,23 @@ func TestErrZeroSizedBulkOperation(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	client := &Client{}
-	if err := client.PushN(ctx, "", nil); !errors.Is(err, ErrZeroSizedBulkOperation) {
-		t.Fatalf("expected error missing (PushN): %v", err)
+	if err := client.Push(ctx, ""); !errors.Is(err, ErrZeroSizedBulkOperation) {
+		t.Fatalf("expected error missing (Push): %v", err)
 	}
-	if _, err := client.ReserveN(ctx, "", 1*time.Second, 0); !errors.Is(err, ErrZeroSizedBulkOperation) {
-		t.Fatalf("expected error missing (ReserveN): %v", err)
+	if _, err := client.Reserve(ctx, "", 1*time.Second, 0); !errors.Is(err, ErrZeroSizedBulkOperation) {
+		t.Fatalf("expected error missing (Reserve): %v", err)
 	}
-	if _, err := client.PopN(ctx, "", 0); !errors.Is(err, ErrZeroSizedBulkOperation) {
-		t.Fatalf("expected error missing (PopN): %v", err)
+	if err := client.Release(ctx); !errors.Is(err, ErrZeroSizedBulkOperation) {
+		t.Fatalf("expected error missing (Release): %v", err)
+	}
+	if _, err := client.Pop(ctx, "", 0); !errors.Is(err, ErrZeroSizedBulkOperation) {
+		t.Fatalf("expected error missing (Pop): %v", err)
+	}
+	if err := client.Delete(ctx); !errors.Is(err, ErrZeroSizedBulkOperation) {
+		t.Fatalf("expected error missing (Delete): %v", err)
+	}
+	if err := client.Extend(ctx, time.Hour); !errors.Is(err, ErrZeroSizedBulkOperation) {
+		t.Fatalf("expected error missing (Extend): %v", err)
 	}
 }
 
@@ -476,7 +483,7 @@ func TestClientClose(t *testing.T) {
 		}
 	})
 	t.Run("reserve", func(t *testing.T) {
-		if _, err := client.Reserve(ctx, queueName, time.Hour); !errors.Is(err, ErrAlreadyClosed) {
+		if _, err := client.Reserve(ctx, queueName, time.Hour, 1); !errors.Is(err, ErrAlreadyClosed) {
 			t.Fatal("expected error missing:", err)
 		}
 	})
@@ -486,12 +493,12 @@ func TestClientClose(t *testing.T) {
 		}
 	})
 	t.Run("extend", func(t *testing.T) {
-		if err := client.Extend(ctx, 0, time.Hour); !errors.Is(err, ErrAlreadyClosed) {
+		if err := client.Extend(ctx, time.Hour, 0); !errors.Is(err, ErrAlreadyClosed) {
 			t.Fatal("expected error missing:", err)
 		}
 	})
 	t.Run("pop", func(t *testing.T) {
-		if _, err := client.Pop(ctx, queueName); !errors.Is(err, ErrAlreadyClosed) {
+		if _, err := client.Pop(ctx, queueName, 1); !errors.Is(err, ErrAlreadyClosed) {
 			t.Fatal("expected error missing:", err)
 		}
 	})
@@ -519,21 +526,21 @@ func TestMessageAttributes(t *testing.T) {
 	if err := client.Push(ctx, queueName, []byte("content")); err != nil {
 		t.Fatal("cannot push message to queue:", err)
 	}
-	m, err := client.Reserve(ctx, queueName, 5*time.Minute)
+	m, err := client.Reserve(ctx, queueName, 5*time.Minute, 1)
 	if err != nil {
 		t.Fatal("unexpected error:", err)
 	}
-	t.Logf("%v %s %v", m.ID(), m.Content(), m.LeaseDeadline())
-	if err := client.Delete(ctx, m.ID()); err != nil {
+	t.Logf("%v %s %v", m[0].ID(), m[0].Content(), m[0].LeaseDeadline())
+	if err := client.Delete(ctx, m[0].ID()); err != nil {
 		t.Fatal("cannot delete message:", err)
 	}
-	if m.ID() == 0 {
+	if m[0].ID() == 0 {
 		t.Error("missing message ID")
 	}
-	if len(m.Content()) == 0 {
+	if len(m[0].Content()) == 0 {
 		t.Error("missing message content")
 	}
-	if m.LeaseDeadline().IsZero() {
+	if m[0].LeaseDeadline().IsZero() {
 		t.Error("missing message lease deadline")
 	}
 }
@@ -555,7 +562,7 @@ func TestPurge(t *testing.T) {
 		msgs[i] = msg
 	}
 	queueName := "queue-purge"
-	if err := client.PushN(ctx, queueName, msgs); err != nil {
+	if err := client.Push(ctx, queueName, msgs...); err != nil {
 		t.Fatal("cannot push message:", err)
 	}
 	if err := client.Purge(ctx, queueName); err != nil {
@@ -587,11 +594,11 @@ func TestReleaseN(t *testing.T) {
 		if err := client.Push(ctx, queueName, msg); err != nil {
 			t.Fatal("cannot push message:", err)
 		}
-		m, err := client.Reserve(ctx, queueName, 1*time.Minute)
+		m, err := client.Reserve(ctx, queueName, 1*time.Minute, 1)
 		if err != nil {
 			t.Fatal("cannot reserve message:", err)
 		}
-		if err := client.ReleaseN(ctx, []uint64{m.ID()}); err != nil {
+		if err := client.Release(ctx, m[0].ID()); err != nil {
 			t.Fatal("cannot release message:", err)
 		}
 	})
@@ -611,11 +618,11 @@ func TestReleaseN(t *testing.T) {
 		if err := client.Push(ctx, queueName, msg); err != nil {
 			t.Fatal("cannot push message:", err)
 		}
-		m, err := client.Reserve(ctx, queueName, 1*time.Minute)
+		m, err := client.Reserve(ctx, queueName, 1*time.Minute, 1)
 		if err != nil {
 			t.Fatal("cannot reserve message:", err)
 		}
-		if err := client.ReleaseN(ctx, []uint64{m.ID(), 0xdeadbeef}); !errors.Is(err, ErrReleaseIncomplete) {
+		if err := client.Release(ctx, m[0].ID(), 0xdeadbeef); !errors.Is(err, ErrReleaseIncomplete) {
 			t.Fatal("cannot release message:", err)
 		}
 	})

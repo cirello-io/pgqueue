@@ -493,13 +493,8 @@ func (c *Client) ApproximateCount(ctx context.Context, queueName string) (int, e
 	return count, err
 }
 
-// Push enqueues the given content to the target queue.
-func (c *Client) Push(ctx context.Context, queueName string, content []byte) error {
-	return c.PushN(ctx, queueName, [][]byte{content})
-}
-
 // Push enqueues the given content batch to the target queue.
-func (c *Client) PushN(ctx context.Context, queueName string, contents [][]byte) error {
+func (c *Client) Push(ctx context.Context, queueName string, contents ...[]byte) error {
 	if c.isClosed() {
 		return ErrAlreadyClosed
 	}
@@ -520,23 +515,11 @@ func (c *Client) PushN(ctx context.Context, queueName string, contents [][]byte)
 	})
 }
 
-// Reserve retrieves the pending message from the queue, if any available. It
-// marks it as InProgress until the defined lease duration. If the message is
-// not marked as Done by the lease time, it is returned to the queue. Lease
-// duration must be multiple of milliseconds.
-func (c *Client) Reserve(ctx context.Context, queueName string, lease time.Duration) (*Message, error) {
-	msgs, err := c.ReserveN(ctx, queueName, lease, 1)
-	if err != nil {
-		return nil, err
-	}
-	return msgs[0], nil
-}
-
-// ReserveN retrieves a batch of pending messages from the queue, if any
+// Reserve retrieves a batch of pending messages from the queue, if any
 // available. It marks them as InProgress until the defined lease duration. If
 // the message is not marked as Done by the lease time, it is returned to the
 // queue. Lease duration must be multiple of milliseconds.
-func (c *Client) ReserveN(ctx context.Context, queueName string, lease time.Duration, n int) ([]*Message, error) {
+func (c *Client) Reserve(ctx context.Context, queueName string, lease time.Duration, n int) ([]*Message, error) {
 	if c.isClosed() {
 		return nil, ErrAlreadyClosed
 	}
@@ -603,15 +586,13 @@ func (c *Client) ReserveN(ctx context.Context, queueName string, lease time.Dura
 
 }
 
-// Release puts one message back to the queue.
-func (c *Client) Release(ctx context.Context, id uint64) error {
-	return c.ReleaseN(ctx, []uint64{id})
-}
-
-// ReleaseN puts the messages back to the queue.
-func (c *Client) ReleaseN(ctx context.Context, ids []uint64) error {
+// Release puts the messages back to the queue.
+func (c *Client) Release(ctx context.Context, ids ...uint64) error {
 	if c.isClosed() {
 		return ErrAlreadyClosed
+	}
+	if len(ids) == 0 {
+		return ErrZeroSizedBulkOperation
 	}
 	return c.connDo(func(conn *nonCancelableConn) error {
 		result, err := conn.Exec(ctx, `
@@ -644,20 +625,17 @@ func (c *Client) ReleaseN(ctx context.Context, ids []uint64) error {
 	})
 }
 
-// Extend extends the message lease by the given duration. The duration must be
-// multiples of milliseconds.
-func (c *Client) Extend(ctx context.Context, id uint64, extension time.Duration) error {
-	return c.ExtendN(ctx, []uint64{id}, extension)
-}
-
-// ExtendN extends the messages lease by the given duration. The duration must
+// Extend extends the messages lease by the given duration. The duration must
 // be multiples of milliseconds.
-func (c *Client) ExtendN(ctx context.Context, ids []uint64, extension time.Duration) error {
+func (c *Client) Extend(ctx context.Context, extension time.Duration, ids ...uint64) error {
 	if c.isClosed() {
 		return ErrAlreadyClosed
 	}
 	if err := validDuration(extension); err != nil {
 		return err
+	}
+	if len(ids) == 0 {
+		return ErrZeroSizedBulkOperation
 	}
 	return c.connDo(func(conn *nonCancelableConn) error {
 		_, err := conn.Exec(ctx, `
@@ -684,19 +662,9 @@ func (c *Client) ExtendN(ctx context.Context, ids []uint64, extension time.Durat
 	})
 }
 
-// Pop retrieves the pending message from the queue, if any available. If the
-// queue is empty, it returns ErrEmptyQueue.
-func (c *Client) Pop(ctx context.Context, queueName string) ([]byte, error) {
-	contents, err := c.PopN(ctx, queueName, 1)
-	if err != nil {
-		return nil, err
-	}
-	return contents[0], nil
-}
-
 // Pop retrieves a batch pending message from the queue, if any available. If
 // the queue is empty, it returns ErrEmptyQueue.
-func (c *Client) PopN(ctx context.Context, queueName string, n int) ([][]byte, error) {
+func (c *Client) Pop(ctx context.Context, queueName string, n int) ([][]byte, error) {
 	if c.isClosed() {
 		return nil, ErrAlreadyClosed
 	}
@@ -748,15 +716,13 @@ func (c *Client) PopN(ctx context.Context, queueName string, n int) ([][]byte, e
 	return contents, nil
 }
 
-// Delete removes the message from the queue.
-func (c *Client) Delete(ctx context.Context, id uint64) error {
-	return c.DeleteN(ctx, []uint64{id})
-}
-
-// DeleteN removes the messages from the queue.
-func (c *Client) DeleteN(ctx context.Context, ids []uint64) error {
+// Delete removes the messages from the queue.
+func (c *Client) Delete(ctx context.Context, ids ...uint64) error {
 	if c.isClosed() {
 		return ErrAlreadyClosed
+	}
+	if len(ids) == 0 {
+		return ErrZeroSizedBulkOperation
 	}
 	return c.connDo(func(conn *nonCancelableConn) error {
 		_, err := conn.Exec(ctx, `

@@ -87,7 +87,7 @@ func TestClient_PushN_errors(t *testing.T) {
 	ctx := context.Background()
 	client := Open(mock)
 	defer client.Close()
-	if err := client.PushN(ctx, "queue", [][]byte{[]byte("content")}); !errors.Is(err, errExpected) {
+	if err := client.Push(ctx, "queue", []byte("content")); !errors.Is(err, errExpected) {
 		t.Fatal("unexpected error:", err)
 	}
 }
@@ -105,7 +105,7 @@ func TestClient_ReserveN_errors(t *testing.T) {
 		ctx := context.Background()
 		client := Open(mock)
 		defer client.Close()
-		if _, err := client.ReserveN(ctx, "queue", 1*time.Second, 1); !errors.Is(err, errExpected) {
+		if _, err := client.Reserve(ctx, "queue", 1*time.Second, 1); !errors.Is(err, errExpected) {
 			t.Fatal("unexpected error:", err)
 		}
 	})
@@ -120,7 +120,7 @@ func TestClient_ReserveN_errors(t *testing.T) {
 		ctx := context.Background()
 		client := Open(mock)
 		defer client.Close()
-		if _, err := client.ReserveN(ctx, "queue", 1*time.Second, 1); err == nil {
+		if _, err := client.Reserve(ctx, "queue", 1*time.Second, 1); err == nil {
 			t.Fatal("expected error missing")
 		}
 	})
@@ -137,7 +137,7 @@ func TestClient_ReleaseN_errors(t *testing.T) {
 	ctx := context.Background()
 	client := Open(mock)
 	defer client.Close()
-	if err := client.ReleaseN(ctx, []uint64{1}); !errors.Is(err, errExpected) {
+	if err := client.Release(ctx, 1); !errors.Is(err, errExpected) {
 		t.Fatal("unexpected error:", err)
 	}
 }
@@ -153,7 +153,7 @@ func TestClient_ExtendN_errors(t *testing.T) {
 	ctx := context.Background()
 	client := Open(mock)
 	defer client.Close()
-	if err := client.ExtendN(ctx, []uint64{1}, 1*time.Minute); !errors.Is(err, errExpected) {
+	if err := client.Extend(ctx, 1*time.Minute, 1); !errors.Is(err, errExpected) {
 		t.Fatal("unexpected error:", err)
 	}
 }
@@ -169,7 +169,7 @@ func TestClient_DeleteN_errors(t *testing.T) {
 	ctx := context.Background()
 	client := Open(mock)
 	defer client.Close()
-	if err := client.DeleteN(ctx, []uint64{1}); !errors.Is(err, errExpected) {
+	if err := client.Delete(ctx, 1); !errors.Is(err, errExpected) {
 		t.Fatal("unexpected error:", err)
 	}
 }
@@ -203,7 +203,7 @@ func TestClient_PopN_errors(t *testing.T) {
 		ctx := context.Background()
 		client := Open(mock)
 		defer client.Close()
-		if _, err := client.PopN(ctx, "queue", 1); !errors.Is(err, errExpected) {
+		if _, err := client.Pop(ctx, "queue", 1); !errors.Is(err, errExpected) {
 			t.Fatal("unexpected error:", err)
 		}
 	})
@@ -218,7 +218,7 @@ func TestClient_PopN_errors(t *testing.T) {
 		ctx := context.Background()
 		client := Open(mock)
 		defer client.Close()
-		if _, err := client.PopN(ctx, "queue", 1); err == nil {
+		if _, err := client.Pop(ctx, "queue", 1); err == nil {
 			t.Fatal("expected error missing")
 		}
 	})

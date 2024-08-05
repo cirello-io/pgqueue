@@ -41,11 +41,11 @@ func Example_basic() {
 	if err := client.Push(ctx, queueName, []byte("content")); err != nil {
 		log.Fatalln("cannot push message to queue:", err)
 	}
-	poppedContent, err := client.Pop(ctx, queueName)
+	poppedContent, err := client.Pop(ctx, queueName, 1)
 	if err != nil {
 		log.Fatalln("cannot pop message from the queue:", err)
 	}
-	fmt.Printf("content: %s\n", poppedContent)
+	fmt.Printf("content: %s\n", poppedContent[0])
 	// Output:
 	// content: content
 }
@@ -61,7 +61,7 @@ func Example_emptyQueue() {
 	if err := client.CreateTable(ctx); err != nil {
 		log.Fatalln("cannot create queue table:", err)
 	}
-	_, err = client.Pop(ctx, "empty-name")
+	_, err = client.Pop(ctx, "empty-name", 1)
 	fmt.Println("err:", err)
 	// Output:
 	// err: empty queue
@@ -82,12 +82,12 @@ func Example_reservation() {
 	if err := client.Push(ctx, queueName, []byte("content")); err != nil {
 		log.Fatalln("cannot push message to queue:", err)
 	}
-	msg, err := client.Reserve(ctx, queueName, 1*time.Minute)
+	msgs, err := client.Reserve(ctx, queueName, 1*time.Minute, 1)
 	if err != nil {
 		log.Fatalln("cannot reserve message from the queue:", err)
 	}
-	fmt.Printf("content: %s\n", msg.Content())
-	if err := client.Delete(ctx, msg.ID()); err != nil {
+	fmt.Printf("content: %s\n", msgs[0].Content())
+	if err := client.Delete(ctx, msgs[0].ID()); err != nil {
 		log.Fatalln("cannot mark message as done:", err)
 	}
 	// Output:
@@ -109,12 +109,12 @@ func Example_reservedReleased() {
 	if err := client.Push(ctx, queueName, []byte("content")); err != nil {
 		log.Fatalln("cannot push message to queue:", err)
 	}
-	msg, err := client.Reserve(ctx, queueName, 1*time.Minute)
+	msgs, err := client.Reserve(ctx, queueName, 1*time.Minute, 1)
 	if err != nil {
 		log.Fatalln("cannot pop message from the queue:", err)
 	}
-	fmt.Printf("content: %s\n", msg.Content())
-	if err := client.Release(ctx, msg.ID()); err != nil {
+	fmt.Printf("content: %s\n", msgs[0].Content())
+	if err := client.Release(ctx, msgs[0].ID()); err != nil {
 		log.Fatalln("cannot release the message back to the queue:", err)
 	}
 	// Output:
@@ -136,12 +136,12 @@ func Example_reservedReleasedDeleted() {
 	if err := client.Push(ctx, queueName, []byte("content")); err != nil {
 		log.Fatalln("cannot push message to queue:", err)
 	}
-	msg, err := client.Reserve(ctx, queueName, 1*time.Minute)
+	msgs, err := client.Reserve(ctx, queueName, 1*time.Minute, 1)
 	if err != nil {
 		log.Fatalln("cannot pop message from the queue:", err)
 	}
-	fmt.Printf("content: %s\n", msg.Content())
-	if err := client.Delete(ctx, msg.ID()); err != nil {
+	fmt.Printf("content: %s\n", msgs[0].Content())
+	if err := client.Delete(ctx, msgs[0].ID()); err != nil {
 		log.Fatalln("cannot remove the message from the queue:", err)
 	}
 	// Output:
@@ -163,13 +163,13 @@ func Example_reservedTouch() {
 	if err := client.Push(ctx, queueName, []byte("content")); err != nil {
 		log.Fatalln("cannot push message to queue:", err)
 	}
-	r, err := client.Reserve(ctx, queueName, 10*time.Second)
+	msgs, err := client.Reserve(ctx, queueName, 10*time.Second, 1)
 	if err != nil {
 		log.Fatalln("cannot pop message from the queue:", err)
 	}
-	fmt.Printf("content: %s\n", r.Content())
+	fmt.Printf("content: %s\n", msgs[0].Content())
 	time.Sleep(5 * time.Second)
-	if err := client.Extend(ctx, r.ID(), 1*time.Minute); err != nil {
+	if err := client.Extend(ctx, 1*time.Minute, msgs[0].ID()); err != nil {
 		log.Fatalln("cannot extend message lease:", err)
 	}
 	// Output:
@@ -192,7 +192,7 @@ func Example_vacuum() {
 		if err := client.Push(ctx, queueName, []byte("content")); err != nil {
 			log.Fatalln("cannot push message to queue:", err)
 		}
-		if _, err := client.Pop(ctx, queueName); err != nil {
+		if _, err := client.Pop(ctx, queueName, 1); err != nil {
 			log.Fatalln("cannot pop message from the queue:", err)
 		}
 	}
