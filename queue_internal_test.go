@@ -56,6 +56,7 @@ func TestClient_CreateTable_errors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer client.Close()
 	if err := client.CreateTable(ctx); !errors.Is(err, errExpected) {
 		t.Fatal("unexpected error:", err)
 	}
@@ -73,6 +74,7 @@ func TestClient_ApproximateCount_errors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer client.Close()
 	if _, err := client.ApproximateCount(ctx, "queue"); !errors.Is(err, errExpected) {
 		t.Fatal("unexpected error:", err)
 	}
@@ -90,6 +92,7 @@ func TestClient_PushN_errors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer client.Close()
 	if err := client.PushN(ctx, "queue", [][]byte{[]byte("content")}); !errors.Is(err, errExpected) {
 		t.Fatal("unexpected error:", err)
 	}
@@ -108,6 +111,7 @@ func TestClient_ReserveN_errors(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		defer client.Close()
 		if _, err := client.ReserveN(ctx, "queue", 1*time.Second, 1); !errors.Is(err, errExpected) {
 			t.Fatal("unexpected error:", err)
 		}
@@ -124,6 +128,7 @@ func TestClient_ReserveN_errors(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		defer client.Close()
 		if _, err := client.ReserveN(ctx, "queue", 1*time.Second, 1); err == nil {
 			t.Fatal("expected error missing")
 		}
@@ -142,6 +147,7 @@ func TestClient_ReleaseN_errors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer client.Close()
 	if err := client.ReleaseN(ctx, []uint64{1}); !errors.Is(err, errExpected) {
 		t.Fatal("unexpected error:", err)
 	}
@@ -159,6 +165,7 @@ func TestClient_ExtendN_errors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer client.Close()
 	if err := client.ExtendN(ctx, []uint64{1}, 1*time.Minute); !errors.Is(err, errExpected) {
 		t.Fatal("unexpected error:", err)
 	}
@@ -176,6 +183,7 @@ func TestClient_DeleteN_errors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer client.Close()
 	if err := client.DeleteN(ctx, []uint64{1}); !errors.Is(err, errExpected) {
 		t.Fatal("unexpected error:", err)
 	}
@@ -193,6 +201,7 @@ func TestClient_PurgeN_errors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer client.Close()
 	if err := client.Purge(ctx, "queue"); !errors.Is(err, errExpected) {
 		t.Fatal("unexpected error:", err)
 	}
@@ -211,6 +220,7 @@ func TestClient_PopN_errors(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		defer client.Close()
 		if _, err := client.PopN(ctx, "queue", 1); !errors.Is(err, errExpected) {
 			t.Fatal("unexpected error:", err)
 		}
@@ -227,6 +237,7 @@ func TestClient_PopN_errors(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		defer client.Close()
 		if _, err := client.PopN(ctx, "queue", 1); err == nil {
 			t.Fatal("expected error missing")
 		}
