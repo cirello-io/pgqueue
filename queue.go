@@ -775,6 +775,33 @@ func (c *Client) DeleteN(ctx context.Context, ids []uint64) error {
 	})
 }
 
+// Purge a queue, removing all messages from it.
+func (c *Client) Purge(ctx context.Context, queueName string) error {
+	if c.isClosed() {
+		return ErrAlreadyClosed
+	}
+	return c.connDo(func(conn *nonCancelableConn) error {
+		_, err := conn.Exec(ctx, `
+			DELETE FROM
+				`+quoteIdentifier(c.tableName)+`
+			WHERE
+				id IN (
+					SELECT
+						id
+					FROM
+						`+quoteIdentifier(c.tableName)+`
+					WHERE
+						queue = $1
+					FOR UPDATE
+				)
+		`, queueName)
+		if err != nil {
+			return fmt.Errorf("cannot purge queue: %w", err)
+		}
+		return nil
+	})
+}
+
 // Message represents one message from the queue.
 type Message struct {
 	id          uint64

@@ -538,3 +538,38 @@ func TestMessageAttributes(t *testing.T) {
 		t.Error("missing message lease deadline")
 	}
 }
+
+func TestPurge(t *testing.T) {
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal("cannot open database connection pool:", err)
+	}
+	client, err := Open(ctx, pool, DisableAutoVacuum(), WithCustomTable("purge"))
+	if err != nil {
+		t.Fatal("cannot open database connection:", err)
+	}
+	defer client.Close()
+	if err := client.CreateTable(ctx); err != nil {
+		t.Fatal("cannot create queue table:", err)
+	}
+	msg := bytes.Repeat([]byte("A"), 65536)
+	msgs := make([][]byte, 10_000)
+	for i := range msgs {
+		msgs[i] = msg
+	}
+	queueName := "queue-purge"
+	if err := client.PushN(ctx, queueName, msgs); err != nil {
+		t.Fatal("cannot push message:", err)
+	}
+	if err := client.Purge(ctx, queueName); err != nil {
+		t.Fatal("cannot purge queue:", err)
+	}
+	count, err := client.ApproximateCount(ctx, queueName)
+	if err != nil {
+		t.Fatal("cannot get approximate message count:", err)
+	}
+	if count != 0 {
+		t.Fatalf("unexpected approximate message count: %d", count)
+	}
+}
