@@ -230,8 +230,6 @@ func (c *Client) DumpDeadLetterQueue(ctx context.Context, queue string, n int) (
 		for rows.Next() {
 			if err := rows.Scan(&id, &content); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 				return fmt.Errorf("cannot read dead message: %w", err)
-			} else if errors.Is(err, pgx.ErrNoRows) {
-				return ErrEmptyQueue
 			}
 			ids = append(ids, id)
 			msgs = append(msgs, &DeadMessage{

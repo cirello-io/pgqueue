@@ -259,6 +259,28 @@ func TestDeadLetterDump(t *testing.T) {
 			t.Fatal("unexpected error:", err)
 		}
 	})
+	t.Run("emptyQueue", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		const reservationTime = 500 * time.Millisecond
+		client, err := Open(ctx, setupPool(t),
+			WithMaxDeliveries(2),
+			DisableAutoVacuum(),
+			EnableDeadLetterQueue(),
+			WithCustomTable("deadletter-empty-queue"),
+		)
+		if err != nil {
+			t.Fatal("cannot open database connection:", err)
+		}
+		defer client.Close()
+		if err := client.CreateTable(ctx); err != nil {
+			t.Fatal("cannot create queue table:", err)
+		}
+		queueName := "example-deadletter-queue"
+		if _, err := client.DumpDeadLetterQueue(ctx, queueName, 1); err != nil {
+			t.Fatal("unexpected error:", err)
+		}
+	})
 }
 
 func TestReconfiguredClient(t *testing.T) {
