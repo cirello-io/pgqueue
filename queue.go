@@ -106,11 +106,16 @@ func WithMaxDeliveries(maxDeliveries int) ClientOption {
 	}
 }
 
+// CustomAutoVacuumFrequency changes the frequency of the automatic vacuum.
+func CustomAutoVacuumFrequency(d time.Duration) ClientOption {
+	return func(c *Client) {
+		c.vacuumTickerFreq = d
+	}
+}
+
 // DisableAutoVacuum forces the use of manual queue clean up.
 func DisableAutoVacuum() ClientOption {
-	return func(c *Client) {
-		c.vacuumTickerFreq = 0
-	}
+	return CustomAutoVacuumFrequency(0)
 }
 
 // EnableDeadLetterQueue keeps errored messages for later inspection.
