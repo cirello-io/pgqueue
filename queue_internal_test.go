@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/pashagolub/pgxmock/v4"
 )
 
@@ -73,6 +74,23 @@ func TestClient_ApproximateCount_errors(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := client.ApproximateCount(ctx, "queue"); !errors.Is(err, errExpected) {
+		t.Fatal("unexpected error:", err)
+	}
+}
+
+func TestClient_PushN_errors(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	errExpected := errors.New("mock error")
+	mock.ExpectCopyFrom(pgx.Identifier{"queue"}, []string{"queue", "state", "content"}).WillReturnError(errExpected)
+	ctx := context.Background()
+	client, err := Open(ctx, mock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.PushN(ctx, "queue", [][]byte{[]byte("content")}); !errors.Is(err, errExpected) {
 		t.Fatal("unexpected error:", err)
 	}
 }
