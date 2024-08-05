@@ -627,3 +627,20 @@ func TestReleaseN(t *testing.T) {
 		}
 	})
 }
+
+func TestClient_autoVacuum(t *testing.T) {
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal("cannot open database connection pool:", err)
+	}
+	client := Open(pool, WithCustomTable("autoVacuum"))
+	defer client.Close()
+	if err := client.CreateTable(ctx); err != nil {
+		t.Fatal("cannot create queue table:", err)
+	}
+	time.Sleep(client.vacuumTickerFreq + 1*time.Second)
+	if client.VacuumStats().LastRun.IsZero() {
+		t.Fatal("vacuum should have run")
+	}
+}

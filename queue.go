@@ -86,6 +86,8 @@ type Client struct {
 
 	vacuumTickerFreq   time.Duration
 	vacuumSingleflight singleflight.Group
+	vacuumStatsMu      sync.RWMutex
+	vacuumStats        VacuumStats
 }
 
 // ClientOption reconfigures the behavior of the pgqueue Client.
@@ -162,9 +164,19 @@ func (c *Client) runAutoVacuum() {
 		case <-c.closed:
 			return
 		case <-ticker.C:
-			c.Vacuum(context.Background())
+			stats := c.Vacuum(context.Background())
+			c.vacuumStatsMu.Lock()
+			c.vacuumStats = stats
+			c.vacuumStatsMu.Unlock()
 		}
 	}
+}
+
+// VacuumStats returns the latest statistics of the auto-vacuum operation.
+func (c *Client) VacuumStats() VacuumStats {
+	c.vacuumStatsMu.RLock()
+	defer c.vacuumStatsMu.RUnlock()
+	return c.vacuumStats
 }
 
 // Close stops the queue system.
