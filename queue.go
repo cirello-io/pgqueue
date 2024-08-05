@@ -85,7 +85,7 @@ type Client struct {
 	closed    chan struct{}
 	cancel    context.CancelFunc
 
-	vacuumTicker       *time.Ticker
+	vacuumTickerFreq   time.Duration
 	vacuumSingleflight singleflight.Group
 }
 
@@ -110,9 +110,7 @@ func WithMaxDeliveries(maxDeliveries int) ClientOption {
 // DisableAutoVacuum forces the use of manual queue clean up.
 func DisableAutoVacuum() ClientOption {
 	return func(c *Client) {
-		if c.vacuumTicker != nil {
-			c.vacuumTicker.Stop()
-		}
+		c.vacuumTickerFreq = 0
 	}
 }
 
@@ -130,7 +128,7 @@ func Open(ctx context.Context, pool PgxConn, opts ...ClientOption) (*Client, err
 		tableName: defaultTableName,
 		pool:      pool,
 
-		vacuumTicker:       time.NewTicker(defaultVacuumFrequency),
+		vacuumTickerFreq:   defaultVacuumFrequency,
 		queueMaxDeliveries: DefaultMaxDeliveriesCount,
 
 		closed: make(chan struct{}),
@@ -139,7 +137,7 @@ func Open(ctx context.Context, pool PgxConn, opts ...ClientOption) (*Client, err
 	for _, opt := range opts {
 		opt(c)
 	}
-	if c.vacuumTicker != nil {
+	if c.vacuumTickerFreq > 0 {
 		go c.runAutoVacuum(ctx)
 	}
 	return c, ctx.Err()
@@ -155,11 +153,13 @@ func (c *Client) isClosed() bool {
 }
 
 func (c *Client) runAutoVacuum(ctx context.Context) {
+	ticker := time.NewTicker(c.vacuumTickerFreq)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-c.vacuumTicker.C:
+		case <-ticker.C:
 			c.Vacuum(ctx)
 		}
 	}
