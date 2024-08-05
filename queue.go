@@ -228,7 +228,7 @@ func (c *Client) DumpDeadLetterQueue(ctx context.Context, queue string, n int) (
 		)
 		defer rows.Close()
 		for rows.Next() {
-			if err := rows.Scan(&id, &content); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			if err := rows.Scan(&id, &content); err != nil {
 				return fmt.Errorf("cannot read dead message: %w", err)
 			}
 			ids = append(ids, id)
@@ -732,7 +732,7 @@ func (c *Client) PopN(ctx context.Context, queueName string, n int) ([][]byte, e
 		defer rows.Close()
 		for rows.Next() {
 			var content []byte
-			if err := rows.Scan(&content); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			if err := rows.Scan(&content); err != nil {
 				return fmt.Errorf("cannot pop message: %w", err)
 			}
 			contents = append(contents, content)
