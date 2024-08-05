@@ -262,7 +262,6 @@ func TestDeadLetterDump(t *testing.T) {
 	t.Run("emptyQueue", func(t *testing.T) {
 		t.Parallel()
 		ctx := context.Background()
-		const reservationTime = 500 * time.Millisecond
 		client, err := Open(ctx, setupPool(t),
 			WithMaxDeliveries(2),
 			DisableAutoVacuum(),
