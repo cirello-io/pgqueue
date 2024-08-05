@@ -3,7 +3,6 @@ module cirello.io/pgqueue
 go 1.18
 
 require (
-	cirello.io/pidctl v1.1.0
 	github.com/jackc/pgx/v5 v5.6.0
 	golang.org/x/sync v0.7.0
 )
