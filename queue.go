@@ -363,9 +363,7 @@ func (c *Client) Vacuum(ctx context.Context) VacuumStats {
 func (c *Client) vacuum(ctx context.Context) (stats VacuumStats) {
 	stats.LastRun = time.Now()
 	stats.PageSize = vacuumPageSize
-	_ = c.connDo(func(conn *nonCancelableConn) error {
-		vacuumCurrentPageSize := vacuumPageSize
-		res, err := conn.Exec(ctx, `
+	res, err := c.pool.Exec(ctx, `
 			DELETE FROM
 				`+quoteIdentifier(c.tableName)+`
 			WHERE
@@ -379,16 +377,16 @@ func (c *Client) vacuum(ctx context.Context) (stats VacuumStats) {
 					LIMIT $2
 					FOR UPDATE SKIP LOCKED
 				)
-		`, Done, vacuumCurrentPageSize)
-		if err != nil {
-			stats.ErrDone = fmt.Errorf("cannot store message: %w", err)
-			return nil
-		}
-		stats.DoneCount = res.RowsAffected()
-		if c.queueMaxDeliveries == 0 {
-			return nil
-		}
-		_, err = conn.Exec(ctx, `
+		`, Done, vacuumPageSize)
+	if err != nil {
+		stats.ErrDone = fmt.Errorf("cannot store message: %w", err)
+		return stats
+	}
+	stats.DoneCount = res.RowsAffected()
+	if c.queueMaxDeliveries == 0 {
+		return stats
+	}
+	_, err = c.pool.Exec(ctx, `
 			UPDATE
 				`+quoteIdentifier(c.tableName)+`
 			SET
@@ -406,14 +404,14 @@ func (c *Client) vacuum(ctx context.Context) (stats VacuumStats) {
 					LIMIT $4
 					FOR UPDATE SKIP LOCKED
 				)
-		`, New, InProgress, c.queueMaxDeliveries, vacuumCurrentPageSize)
-		if err != nil {
-			stats.ErrDone = fmt.Errorf("cannot recover messages: %w", err)
-			return nil
-		}
-		stats.DoneCount = res.RowsAffected()
-		if !c.keepOnError {
-			_, err := conn.Exec(ctx, `
+		`, New, InProgress, c.queueMaxDeliveries, vacuumPageSize)
+	if err != nil {
+		stats.ErrRestoreStale = fmt.Errorf("cannot recover messages: %w", err)
+		return stats
+	}
+	stats.RestoreStaleCount = res.RowsAffected()
+	if !c.keepOnError {
+		_, err := c.pool.Exec(ctx, `
 				DELETE FROM
 					`+quoteIdentifier(c.tableName)+`
 				WHERE
@@ -429,14 +427,14 @@ func (c *Client) vacuum(ctx context.Context) (stats VacuumStats) {
 						LIMIT $3
 						FOR UPDATE SKIP LOCKED
 					)
-			`, InProgress, c.queueMaxDeliveries, vacuumCurrentPageSize)
-			if err != nil {
-				stats.ErrBadMessagesDelete = fmt.Errorf("cannot delete errored message from the queue: %w", err)
-				return nil
-			}
-			stats.BadMessagesDeleteCount = res.RowsAffected()
-		} else {
-			res, err := conn.Exec(ctx, `
+			`, InProgress, c.queueMaxDeliveries, vacuumPageSize)
+		if err != nil {
+			stats.ErrBadMessagesDelete = fmt.Errorf("cannot delete errored message from the queue: %w", err)
+			return stats
+		}
+		stats.BadMessagesDeleteCount = res.RowsAffected()
+	} else {
+		res, err := c.pool.Exec(ctx, `
 				UPDATE
 					`+quoteIdentifier(c.tableName)+`
 				SET
@@ -455,19 +453,17 @@ func (c *Client) vacuum(ctx context.Context) (stats VacuumStats) {
 						LIMIT $4
 						FOR UPDATE SKIP LOCKED
 					)
-			`, Dead, InProgress, c.queueMaxDeliveries, vacuumCurrentPageSize)
-			if err != nil {
-				stats.ErrDeadLetterQueue = fmt.Errorf("cannot move message to dead letter queue: %w", err)
-				return nil
-			}
-			stats.DeadLetterQueueCount = res.RowsAffected()
+			`, Dead, InProgress, c.queueMaxDeliveries, vacuumPageSize)
+		if err != nil {
+			stats.ErrDeadLetterQueue = fmt.Errorf("cannot move message to dead letter queue: %w", err)
+			return stats
 		}
-		if _, err := c.pool.Exec(ctx, "VACUUM (SKIP_LOCKED true) "+quoteIdentifier(c.tableName)); err != nil {
-			stats.ErrTableVacuum = fmt.Errorf("cannot vacuum table %q: %w", c.tableName, err)
-			return nil
-		}
-		return nil
-	})
+		stats.DeadLetterQueueCount = res.RowsAffected()
+	}
+	if _, err := c.pool.Exec(ctx, "VACUUM (SKIP_LOCKED true) "+quoteIdentifier(c.tableName)); err != nil {
+		stats.ErrTableVacuum = fmt.Errorf("cannot vacuum table %q: %w", c.tableName, err)
+		return stats
+	}
 	return stats
 }
 

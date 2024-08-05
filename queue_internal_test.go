@@ -335,3 +335,122 @@ func TestClient_DumpDeadLetterQueue_errors(t *testing.T) {
 		}
 	})
 }
+
+func TestClient_vacuum_errors(t *testing.T) {
+	t.Run("errDone", func(t *testing.T) {
+		t.Parallel()
+		mock, err := pgxmock.NewPool()
+		if err != nil {
+			t.Fatal(err)
+		}
+		errExpected := errors.New("mock error")
+		mock.ExpectExec("DELETE").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnError(errExpected)
+		ctx := context.Background()
+		client, err := Open(ctx, mock)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer client.Close()
+		if stats := client.Vacuum(ctx); !errors.Is(stats.ErrDone, errExpected) {
+			t.Fatal("unexpected error:", stats.ErrDone)
+		}
+	})
+	t.Run("errRestoreStale", func(t *testing.T) {
+		t.Parallel()
+		mock, err := pgxmock.NewPool()
+		if err != nil {
+			t.Fatal(err)
+		}
+		errExpected := errors.New("mock error")
+		mock.ExpectExec("DELETE").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnResult(pgxmock.NewResult("DELETE", 1))
+		mock.ExpectExec("UPDATE").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnError(errExpected)
+		ctx := context.Background()
+		client, err := Open(ctx, mock)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer client.Close()
+		if stats := client.Vacuum(ctx); !errors.Is(stats.ErrRestoreStale, errExpected) {
+			t.Fatal("unexpected error:", stats.ErrRestoreStale)
+		}
+	})
+	t.Run("errBadMessagesDelete", func(t *testing.T) {
+		t.Parallel()
+		mock, err := pgxmock.NewPool()
+		if err != nil {
+			t.Fatal(err)
+		}
+		errExpected := errors.New("mock error")
+		mock.ExpectExec("DELETE").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnResult(pgxmock.NewResult("DELETE", 1))
+		mock.ExpectExec("UPDATE").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+		mock.ExpectExec("DELETE").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnError(errExpected)
+		ctx := context.Background()
+		client, err := Open(ctx, mock)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer client.Close()
+		if stats := client.Vacuum(ctx); !errors.Is(stats.ErrBadMessagesDelete, errExpected) {
+			t.Fatal("unexpected error:", stats.ErrBadMessagesDelete)
+		}
+	})
+	t.Run("errDeadLetterQueue", func(t *testing.T) {
+		t.Parallel()
+		mock, err := pgxmock.NewPool()
+		if err != nil {
+			t.Fatal(err)
+		}
+		errExpected := errors.New("mock error")
+		mock.ExpectExec("DELETE").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnResult(pgxmock.NewResult("DELETE", 1))
+		mock.ExpectExec("UPDATE").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+		mock.ExpectExec("UPDATE").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnError(errExpected)
+		ctx := context.Background()
+		client, err := Open(ctx, mock, EnableDeadLetterQueue())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer client.Close()
+		if stats := client.Vacuum(ctx); !errors.Is(stats.ErrDeadLetterQueue, errExpected) {
+			t.Fatal("unexpected error:", stats.ErrDeadLetterQueue)
+		}
+	})
+	t.Run("errTableVacuum", func(t *testing.T) {
+		t.Parallel()
+		mock, err := pgxmock.NewPool()
+		if err != nil {
+			t.Fatal(err)
+		}
+		errExpected := errors.New("mock error")
+		mock.ExpectExec("DELETE").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnResult(pgxmock.NewResult("DELETE", 1))
+		mock.ExpectExec("UPDATE").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+		mock.ExpectExec("DELETE").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnResult(pgxmock.NewResult("DELETE", 1))
+		mock.ExpectExec("VACUUM").WillReturnError(errExpected)
+		ctx := context.Background()
+		client, err := Open(ctx, mock)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer client.Close()
+		if stats := client.Vacuum(ctx); !errors.Is(stats.ErrTableVacuum, errExpected) {
+			t.Fatal("unexpected error:", stats.ErrTableVacuum)
+		}
+	})
+	t.Run("zeroMaxDeliveries", func(t *testing.T) {
+		t.Parallel()
+		mock, err := pgxmock.NewPool()
+		if err != nil {
+			t.Fatal(err)
+		}
+		mock.ExpectExec("DELETE").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnResult(pgxmock.NewResult("DELETE", 1))
+		mock.ExpectExec("UPDATE").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnError(errors.New("mock error"))
+		ctx := context.Background()
+		client, err := Open(ctx, mock, WithMaxDeliveries(0))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer client.Close()
+		if stats := client.Vacuum(ctx); stats.Err() != nil {
+			t.Fatal("unexpected error:", stats.Err())
+		}
+	})
+}
