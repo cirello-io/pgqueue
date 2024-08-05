@@ -737,8 +737,6 @@ func (c *Client) PopN(ctx context.Context, queueName string, n int) ([][]byte, e
 			var content []byte
 			if err := rows.Scan(&content); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 				return fmt.Errorf("cannot pop message: %w", err)
-			} else if errors.Is(err, pgx.ErrNoRows) {
-				return ErrEmptyQueue
 			}
 			contents = append(contents, content)
 		}
