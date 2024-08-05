@@ -586,10 +586,9 @@ func (c *Client) ReserveN(ctx context.Context, queueName string, lease time.Dura
 		)
 		defer rows.Close()
 		for rows.Next() {
-			if err := rows.Scan(&id, &content, &leasedUntil); err != nil && !errors.Is(err, pgx.ErrNoRows) {
-				return fmt.Errorf("cannot reserve message: %w", err)
-			} else if errors.Is(err, pgx.ErrNoRows) {
-				return ErrEmptyQueue
+			err := rows.Scan(&id, &content, &leasedUntil)
+			if err != nil {
+				return fmt.Errorf("cannot scan reserved message: %w", err)
 			}
 			msgs = append(msgs, &Message{
 				id:          id,

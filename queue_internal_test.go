@@ -94,3 +94,38 @@ func TestClient_PushN_errors(t *testing.T) {
 		t.Fatal("unexpected error:", err)
 	}
 }
+
+func TestClient_ReserveN_errors(t *testing.T) {
+	t.Run("queryError", func(t *testing.T) {
+		mock, err := pgxmock.NewPool()
+		if err != nil {
+			t.Fatal(err)
+		}
+		errExpected := errors.New("mock error")
+		mock.ExpectQuery("UPDATE").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnError(errExpected)
+		ctx := context.Background()
+		client, err := Open(ctx, mock)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := client.ReserveN(ctx, "queue", 1*time.Second, 1); !errors.Is(err, errExpected) {
+			t.Fatal("unexpected error:", err)
+		}
+	})
+	t.Run("scanError", func(t *testing.T) {
+		mock, err := pgxmock.NewPool()
+		if err != nil {
+			t.Fatal(err)
+		}
+		mock.ExpectQuery("UPDATE").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+			WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow("1"))
+		ctx := context.Background()
+		client, err := Open(ctx, mock)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := client.ReserveN(ctx, "queue", 1*time.Second, 1); err == nil {
+			t.Fatal("expected error missing")
+		}
+	})
+}
