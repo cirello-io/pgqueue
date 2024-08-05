@@ -129,3 +129,20 @@ func TestClient_ReserveN_errors(t *testing.T) {
 		}
 	})
 }
+
+func TestClient_ReleaseN_errors(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	errExpected := errors.New("mock error")
+	mock.ExpectExec("UPDATE").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnError(errExpected)
+	ctx := context.Background()
+	client, err := Open(ctx, mock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.ReleaseN(ctx, []uint64{1}); !errors.Is(err, errExpected) {
+		t.Fatal("unexpected error:", err)
+	}
+}

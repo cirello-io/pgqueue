@@ -620,3 +620,60 @@ func TestPurge(t *testing.T) {
 		t.Fatalf("unexpected approximate message count: %d", count)
 	}
 }
+
+func TestReleaseN(t *testing.T) {
+	t.Run("fullRelease", func(t *testing.T) {
+		ctx := context.Background()
+		pool, err := pgxpool.New(ctx, dsn)
+		if err != nil {
+			t.Fatal("cannot open database connection pool:", err)
+		}
+		client, err := Open(ctx, pool, DisableAutoVacuum(), WithCustomTable("release-n-full-release"))
+		if err != nil {
+			t.Fatal("cannot open database connection:", err)
+		}
+		defer client.Close()
+		if err := client.CreateTable(ctx); err != nil {
+			t.Fatal("cannot create queue table:", err)
+		}
+		msg := bytes.Repeat([]byte("A"), 65536)
+		queueName := "release-n"
+		if err := client.Push(ctx, queueName, msg); err != nil {
+			t.Fatal("cannot push message:", err)
+		}
+		m, err := client.Reserve(ctx, queueName, 1*time.Minute)
+		if err != nil {
+			t.Fatal("cannot reserve message:", err)
+		}
+		if err := client.ReleaseN(ctx, []uint64{m.ID()}); err != nil {
+			t.Fatal("cannot release message:", err)
+		}
+	})
+	t.Run("incompleteRelease", func(t *testing.T) {
+		ctx := context.Background()
+		pool, err := pgxpool.New(ctx, dsn)
+		if err != nil {
+			t.Fatal("cannot open database connection pool:", err)
+		}
+		client, err := Open(ctx, pool, DisableAutoVacuum(), WithCustomTable("release-n-incomplete-release"))
+		if err != nil {
+			t.Fatal("cannot open database connection:", err)
+		}
+		defer client.Close()
+		if err := client.CreateTable(ctx); err != nil {
+			t.Fatal("cannot create queue table:", err)
+		}
+		msg := bytes.Repeat([]byte("A"), 65536)
+		queueName := "release-n"
+		if err := client.Push(ctx, queueName, msg); err != nil {
+			t.Fatal("cannot push message:", err)
+		}
+		m, err := client.Reserve(ctx, queueName, 1*time.Minute)
+		if err != nil {
+			t.Fatal("cannot reserve message:", err)
+		}
+		if err := client.ReleaseN(ctx, []uint64{m.ID(), 0xdeadbeef}); !errors.Is(err, ErrReleaseIncomplete) {
+			t.Fatal("cannot release message:", err)
+		}
+	})
+}
