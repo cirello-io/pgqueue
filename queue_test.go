@@ -550,6 +550,11 @@ func TestClientClose(t *testing.T) {
 			t.Fatal("expected error missing:", err)
 		}
 	})
+	t.Run("purge", func(t *testing.T) {
+		if err := client.Purge(ctx, queueName); !errors.Is(err, ErrAlreadyClosed) {
+			t.Fatal("expected error missing:", err)
+		}
+	})
 }
 
 func TestMessageAttributes(t *testing.T) {
