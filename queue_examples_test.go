@@ -32,10 +32,7 @@ func Example_basic() {
 	if err != nil {
 		log.Fatalln("cannot open database connection pool:", err)
 	}
-	client, err := pgqueue.Open(ctx, pool)
-	if err != nil {
-		log.Fatalln("cannot create queue handler:", err)
-	}
+	client := pgqueue.Open(pool)
 	defer client.Close()
 	if err := client.CreateTable(ctx); err != nil {
 		log.Fatalln("cannot create queue table:", err)
@@ -59,10 +56,7 @@ func Example_emptyQueue() {
 	if err != nil {
 		log.Fatalln("cannot open database connection pool:", err)
 	}
-	client, err := pgqueue.Open(ctx, pool)
-	if err != nil {
-		log.Fatalln("cannot create queue handler:", err)
-	}
+	client := pgqueue.Open(pool)
 	defer client.Close()
 	if err := client.CreateTable(ctx); err != nil {
 		log.Fatalln("cannot create queue table:", err)
@@ -79,10 +73,7 @@ func Example_reservation() {
 	if err != nil {
 		log.Fatalln("cannot open database connection pool:", err)
 	}
-	client, err := pgqueue.Open(ctx, pool)
-	if err != nil {
-		log.Fatalln("cannot create queue handler:", err)
-	}
+	client := pgqueue.Open(pool)
 	defer client.Close()
 	if err := client.CreateTable(ctx); err != nil {
 		log.Fatalln("cannot create queue table:", err)
@@ -109,10 +100,7 @@ func Example_reservedReleased() {
 	if err != nil {
 		log.Fatalln("cannot open database connection pool:", err)
 	}
-	client, err := pgqueue.Open(ctx, pool)
-	if err != nil {
-		log.Fatalln("cannot create queue handler:", err)
-	}
+	client := pgqueue.Open(pool)
 	defer client.Close()
 	if err := client.CreateTable(ctx); err != nil {
 		log.Fatalln("cannot create queue table:", err)
@@ -139,10 +127,7 @@ func Example_reservedReleasedDeleted() {
 	if err != nil {
 		log.Fatalln("cannot open database connection pool:", err)
 	}
-	client, err := pgqueue.Open(ctx, pool)
-	if err != nil {
-		log.Fatalln("cannot create queue handler:", err)
-	}
+	client := pgqueue.Open(pool)
 	defer client.Close()
 	if err := client.CreateTable(ctx); err != nil {
 		log.Fatalln("cannot create queue table:", err)
@@ -169,10 +154,7 @@ func Example_reservedTouch() {
 	if err != nil {
 		log.Fatalln("cannot open database connection pool:", err)
 	}
-	client, err := pgqueue.Open(ctx, pool)
-	if err != nil {
-		log.Fatalln("cannot create queue handler:", err)
-	}
+	client := pgqueue.Open(pool)
 	defer client.Close()
 	if err := client.CreateTable(ctx); err != nil {
 		log.Fatalln("cannot create queue table:", err)
@@ -200,10 +182,7 @@ func Example_vacuum() {
 	if err != nil {
 		log.Fatalln("cannot open database connection pool:", err)
 	}
-	client, err := pgqueue.Open(ctx, pool, pgqueue.WithMaxDeliveries(1), pgqueue.DisableAutoVacuum())
-	if err != nil {
-		log.Fatalln("cannot create queue handler:", err)
-	}
+	client := pgqueue.Open(pool, pgqueue.WithMaxDeliveries(1), pgqueue.DisableAutoVacuum())
 	defer client.Close()
 	if err := client.CreateTable(ctx); err != nil {
 		log.Fatalln("cannot create queue table:", err)

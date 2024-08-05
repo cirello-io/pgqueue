@@ -42,10 +42,7 @@ func TestOverload(t *testing.T) {
 	t.Run("popPush", func(t *testing.T) {
 		t.Parallel()
 		ctx := context.Background()
-		client, err := Open(ctx, setupPool(t), WithCustomTable("overloadpoppush"), DisableAutoVacuum())
-		if err != nil {
-			t.Fatal("cannot open database connection:", err)
-		}
+		client := Open(setupPool(t), WithCustomTable("overloadpoppush"), DisableAutoVacuum())
 		defer client.Close()
 		if err := client.CreateTable(ctx); err != nil {
 			t.Fatal("cannot create queue table:", err)
@@ -101,10 +98,7 @@ func TestOverload(t *testing.T) {
 	t.Run("popReserveDelete", func(t *testing.T) {
 		t.Parallel()
 		ctx := context.Background()
-		client, err := Open(ctx, setupPool(t), WithCustomTable("overloadpopreservedelete"), DisableAutoVacuum())
-		if err != nil {
-			t.Fatal("cannot open database connection:", err)
-		}
+		client := Open(setupPool(t), WithCustomTable("overloadpopreservedelete"), DisableAutoVacuum())
 		defer client.Close()
 		if err := client.CreateTable(ctx); err != nil {
 			t.Fatal("cannot create queue table:", err)
@@ -176,15 +170,12 @@ func TestDeadLetterDump(t *testing.T) {
 		t.Parallel()
 		ctx := context.Background()
 		const reservationTime = 500 * time.Millisecond
-		client, err := Open(ctx, setupPool(t),
+		client := Open(setupPool(t),
 			WithMaxDeliveries(2),
 			DisableAutoVacuum(),
 			EnableDeadLetterQueue(),
 			WithCustomTable("deadletter-dump-dead-letter-queue"),
 		)
-		if err != nil {
-			t.Fatal("cannot open database connection:", err)
-		}
 		defer client.Close()
 		if err := client.CreateTable(ctx); err != nil {
 			t.Fatal("cannot create queue table:", err)
@@ -223,15 +214,12 @@ func TestDeadLetterDump(t *testing.T) {
 		t.Parallel()
 		ctx := context.Background()
 		const reservationTime = 500 * time.Millisecond
-		client, err := Open(ctx, setupPool(t),
+		client := Open(setupPool(t),
 			WithMaxDeliveries(2),
 			DisableAutoVacuum(),
 			EnableDeadLetterQueue(),
 			WithCustomTable("deadletter-dump-closed-client"),
 		)
-		if err != nil {
-			t.Fatal("cannot open database connection:", err)
-		}
 		defer client.Close()
 		if err := client.CreateTable(ctx); err != nil {
 			t.Fatal("cannot create queue table:", err)
@@ -262,15 +250,12 @@ func TestDeadLetterDump(t *testing.T) {
 	t.Run("emptyQueue", func(t *testing.T) {
 		t.Parallel()
 		ctx := context.Background()
-		client, err := Open(ctx, setupPool(t),
+		client := Open(setupPool(t),
 			WithMaxDeliveries(2),
 			DisableAutoVacuum(),
 			EnableDeadLetterQueue(),
 			WithCustomTable("deadletter-empty-queue"),
 		)
-		if err != nil {
-			t.Fatal("cannot open database connection:", err)
-		}
 		defer client.Close()
 		if err := client.CreateTable(ctx); err != nil {
 			t.Fatal("cannot create queue table:", err)
@@ -287,10 +272,7 @@ func TestReconfiguredClient(t *testing.T) {
 	t.Run("customTable", func(t *testing.T) {
 		t.Parallel()
 		ctx := context.Background()
-		client, err := Open(ctx, setupPool(t), WithCustomTable("queue2"))
-		if err != nil {
-			t.Fatal("cannot open database connection:", err)
-		}
+		client := Open(setupPool(t), WithCustomTable("queue2"))
 		defer client.Close()
 		if err := client.CreateTable(ctx); err != nil {
 			t.Fatal("cannot create queue table:", err)
@@ -308,28 +290,11 @@ func TestReconfiguredClient(t *testing.T) {
 			t.Errorf("unexpected output: %s", poppedContent)
 		}
 	})
-	t.Run("badListener", func(t *testing.T) {
-		t.Parallel()
-		ctx := context.Background()
-		client, err := Open(ctx, setupPool(t), func(c *Client) {
-			// sabotage the client during setup
-			c.Close()
-		})
-		if err == nil {
-			client.Close()
-			t.Fatal("expected error missing")
-		}
-		t.Log("error:", err)
-	})
 }
 
 func TestCloseError(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
-	client, err := Open(ctx, setupPool(t), WithCustomTable("close-error"))
-	if err != nil {
-		t.Fatal("cannot open database connection:", err)
-	}
+	client := Open(setupPool(t), WithCustomTable("close-error"))
 	if err := client.Close(); err != nil {
 		t.Fatal("first close should always be clean:", err)
 	}
@@ -343,10 +308,7 @@ func TestCloseError(t *testing.T) {
 func TestValidationErrors(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	client, err := Open(ctx, setupPool(t), WithCustomTable("validation-errors"), DisableAutoVacuum())
-	if err != nil {
-		t.Fatal("cannot open database connection:", err)
-	}
+	client := Open(setupPool(t), WithCustomTable("validation-errors"), DisableAutoVacuum())
 	defer client.Close()
 	if err := client.CreateTable(ctx); err != nil {
 		t.Fatal("cannot create queue table:", err)
@@ -363,14 +325,11 @@ func TestValidationErrors(t *testing.T) {
 func TestDisableDeadLetterQueue(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	client, err := Open(ctx, setupPool(t),
+	client := Open(setupPool(t),
 		WithMaxDeliveries(1),
 		DisableAutoVacuum(),
 		WithCustomTable("disable-deadletter-queue"),
 	)
-	if err != nil {
-		t.Fatal("cannot open database connection:", err)
-	}
 	defer client.Close()
 	if err := client.CreateTable(ctx); err != nil {
 		t.Fatal("cannot create queue table:", err)
@@ -401,10 +360,7 @@ func TestQueueApproximateCount(t *testing.T) {
 		if err != nil {
 			t.Fatalf("cannot open database connection pool: %v", err)
 		}
-		client, err := Open(ctx, pool, WithCustomTable("queue-approximate-count-full-queue"))
-		if err != nil {
-			t.Fatalf("cannot create queue handler: %v", err)
-		}
+		client := Open(pool, WithCustomTable("queue-approximate-count-full-queue"))
 		defer client.Close()
 		if err := client.CreateTable(ctx); err != nil {
 			t.Fatalf("cannot create queue table: %v", err)
@@ -444,10 +400,7 @@ func TestQueueApproximateCount(t *testing.T) {
 		if err != nil {
 			t.Fatalf("cannot open database connection pool: %v", err)
 		}
-		client, err := Open(ctx, pool, WithCustomTable("queue-approximate-count-empty-queue"))
-		if err != nil {
-			t.Fatalf("cannot create queue handler: %v", err)
-		}
+		client := Open(pool, WithCustomTable("queue-approximate-count-empty-queue"))
 		defer client.Close()
 		if err := client.CreateTable(ctx); err != nil {
 			t.Fatalf("cannot create queue table: %v", err)
@@ -484,10 +437,7 @@ func TestClientClose(t *testing.T) {
 	if err != nil {
 		t.Fatal("cannot open database connection pool:", err)
 	}
-	client, err := Open(ctx, pool, DisableAutoVacuum(), WithCustomTable("client-close"))
-	if err != nil {
-		t.Fatal("cannot open database connection:", err)
-	}
+	client := Open(pool, DisableAutoVacuum(), WithCustomTable("client-close"))
 	t.Run("closeClient", func(t *testing.T) {
 		if err := client.Close(); err != nil {
 			t.Fatal("cannot close client:", err)
@@ -560,10 +510,7 @@ func TestClientClose(t *testing.T) {
 func TestMessageAttributes(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	client, err := Open(ctx, setupPool(t), WithCustomTable("message-attributes"), DisableAutoVacuum())
-	if err != nil {
-		t.Fatal("cannot open database connection:", err)
-	}
+	client := Open(setupPool(t), WithCustomTable("message-attributes"), DisableAutoVacuum())
 	defer client.Close()
 	if err := client.CreateTable(ctx); err != nil {
 		t.Fatal("cannot create queue table:", err)
@@ -597,10 +544,7 @@ func TestPurge(t *testing.T) {
 	if err != nil {
 		t.Fatal("cannot open database connection pool:", err)
 	}
-	client, err := Open(ctx, pool, DisableAutoVacuum(), WithCustomTable("purge"))
-	if err != nil {
-		t.Fatal("cannot open database connection:", err)
-	}
+	client := Open(pool, DisableAutoVacuum(), WithCustomTable("purge"))
 	defer client.Close()
 	if err := client.CreateTable(ctx); err != nil {
 		t.Fatal("cannot create queue table:", err)
@@ -633,10 +577,7 @@ func TestReleaseN(t *testing.T) {
 		if err != nil {
 			t.Fatal("cannot open database connection pool:", err)
 		}
-		client, err := Open(ctx, pool, DisableAutoVacuum(), WithCustomTable("release-n-full-release"))
-		if err != nil {
-			t.Fatal("cannot open database connection:", err)
-		}
+		client := Open(pool, DisableAutoVacuum(), WithCustomTable("release-n-full-release"))
 		defer client.Close()
 		if err := client.CreateTable(ctx); err != nil {
 			t.Fatal("cannot create queue table:", err)
@@ -660,10 +601,7 @@ func TestReleaseN(t *testing.T) {
 		if err != nil {
 			t.Fatal("cannot open database connection pool:", err)
 		}
-		client, err := Open(ctx, pool, DisableAutoVacuum(), WithCustomTable("release-n-incomplete-release"))
-		if err != nil {
-			t.Fatal("cannot open database connection:", err)
-		}
+		client := Open(pool, DisableAutoVacuum(), WithCustomTable("release-n-incomplete-release"))
 		defer client.Close()
 		if err := client.CreateTable(ctx); err != nil {
 			t.Fatal("cannot create queue table:", err)

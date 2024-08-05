@@ -28,10 +28,7 @@ func BenchmarkThroughput(b *testing.B) {
 	if err != nil {
 		b.Fatal("cannot open database connection pool:", err)
 	}
-	client, err := Open(ctx, pool, DisableAutoVacuum())
-	if err != nil {
-		b.Fatal("cannot open database connection:", err)
-	}
+	client := Open(pool, DisableAutoVacuum())
 	defer client.Close()
 	if err := client.CreateTable(ctx); err != nil {
 		b.Fatal("cannot create queue table:", err)

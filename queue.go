@@ -83,7 +83,6 @@ type Client struct {
 
 	closeOnce sync.Once
 	closed    chan struct{}
-	cancel    context.CancelFunc
 
 	vacuumTickerFreq   time.Duration
 	vacuumSingleflight singleflight.Group
@@ -122,8 +121,7 @@ func EnableDeadLetterQueue() ClientOption {
 }
 
 // Open uses the given database connection and start operating the queue system.
-func Open(ctx context.Context, pool PgxConn, opts ...ClientOption) (*Client, error) {
-	ctx, cancel := context.WithCancel(ctx)
+func Open(pool PgxConn, opts ...ClientOption) *Client {
 	c := &Client{
 		tableName: defaultTableName,
 		pool:      pool,
@@ -132,15 +130,14 @@ func Open(ctx context.Context, pool PgxConn, opts ...ClientOption) (*Client, err
 		queueMaxDeliveries: DefaultMaxDeliveriesCount,
 
 		closed: make(chan struct{}),
-		cancel: cancel,
 	}
 	for _, opt := range opts {
 		opt(c)
 	}
 	if c.vacuumTickerFreq > 0 {
-		go c.runAutoVacuum(ctx)
+		go c.runAutoVacuum()
 	}
-	return c, ctx.Err()
+	return c
 }
 
 func (c *Client) isClosed() bool {
@@ -152,15 +149,15 @@ func (c *Client) isClosed() bool {
 	}
 }
 
-func (c *Client) runAutoVacuum(ctx context.Context) {
+func (c *Client) runAutoVacuum() {
 	ticker := time.NewTicker(c.vacuumTickerFreq)
 	defer ticker.Stop()
 	for {
 		select {
-		case <-ctx.Done():
+		case <-c.closed:
 			return
 		case <-ticker.C:
-			c.Vacuum(ctx)
+			c.Vacuum(context.Background())
 		}
 	}
 }
@@ -171,7 +168,6 @@ func (c *Client) Close() error {
 	c.closeOnce.Do(func() {
 		err = nil
 		close(c.closed)
-		c.cancel()
 	})
 	return err
 }
