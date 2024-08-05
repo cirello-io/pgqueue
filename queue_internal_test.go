@@ -163,3 +163,20 @@ func TestClient_ExtendN_errors(t *testing.T) {
 		t.Fatal("unexpected error:", err)
 	}
 }
+
+func TestClient_DeleteN_errors(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	errExpected := errors.New("mock error")
+	mock.ExpectExec("DELETE").WithArgs(pgxmock.AnyArg()).WillReturnError(errExpected)
+	ctx := context.Background()
+	client, err := Open(ctx, mock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.DeleteN(ctx, []uint64{1}); !errors.Is(err, errExpected) {
+		t.Fatal("unexpected error:", err)
+	}
+}
