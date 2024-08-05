@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -78,7 +77,7 @@ const (
 // Client uses a postgreSQL database to run a queue system.
 type Client struct {
 	tableName          string
-	pool               Conn
+	pool               PgxConn
 	queueMaxDeliveries int
 	keepOnError        bool
 
@@ -125,7 +124,7 @@ func EnableDeadLetterQueue() ClientOption {
 }
 
 // Open uses the given database connection and start operating the queue system.
-func Open(ctx context.Context, pool *pgxpool.Pool, opts ...ClientOption) (*Client, error) {
+func Open(ctx context.Context, pool PgxConn, opts ...ClientOption) (*Client, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	c := &Client{
 		tableName: defaultTableName,

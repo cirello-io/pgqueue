@@ -14,9 +14,12 @@
 package pgqueue
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/pashagolub/pgxmock/v4"
 )
 
 func Test_validDuration(t *testing.T) {
@@ -37,5 +40,22 @@ func Test_validDuration(t *testing.T) {
 				t.Errorf("validDuration() = %v, want %v", gotErr, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestClient_CreateTable_errors(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	errExpected := errors.New("mock error")
+	mock.ExpectExec("CREATE TABLE IF NOT EXISTS").WillReturnError(errExpected)
+	ctx := context.Background()
+	client, err := Open(ctx, mock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.CreateTable(ctx); !errors.Is(err, errExpected) {
+		t.Fatal("unexpected error:", err)
 	}
 }

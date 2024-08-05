@@ -1,9 +1,10 @@
 module cirello.io/pgqueue
 
-go 1.18
+go 1.22.5
 
 require (
 	github.com/jackc/pgx/v5 v5.6.0
+	github.com/pashagolub/pgxmock/v4 v4.2.0
 	golang.org/x/sync v0.7.0
 )
 

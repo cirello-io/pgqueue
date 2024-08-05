@@ -20,8 +20,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// Conn is an acquired *pgx.Conn from a Pool.
-type Conn interface {
+// PgxConn is an acquired *pgx.PgxConn from a Pool.
+type PgxConn interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
@@ -38,7 +38,7 @@ func (c *Client) connDo(f func(*nonCancelableConn) error) error {
 }
 
 type nonCancelableConn struct {
-	conn Conn
+	conn PgxConn
 }
 
 func (c *nonCancelableConn) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
