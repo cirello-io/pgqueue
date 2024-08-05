@@ -45,6 +45,7 @@ func Test_validDuration(t *testing.T) {
 }
 
 func TestClient_CreateTable_errors(t *testing.T) {
+	t.Parallel()
 	mock, err := pgxmock.NewPool()
 	if err != nil {
 		t.Fatal(err)
@@ -63,6 +64,7 @@ func TestClient_CreateTable_errors(t *testing.T) {
 }
 
 func TestClient_ApproximateCount_errors(t *testing.T) {
+	t.Parallel()
 	mock, err := pgxmock.NewPool()
 	if err != nil {
 		t.Fatal(err)
@@ -81,6 +83,7 @@ func TestClient_ApproximateCount_errors(t *testing.T) {
 }
 
 func TestClient_PushN_errors(t *testing.T) {
+	t.Parallel()
 	mock, err := pgxmock.NewPool()
 	if err != nil {
 		t.Fatal(err)
@@ -99,7 +102,9 @@ func TestClient_PushN_errors(t *testing.T) {
 }
 
 func TestClient_ReserveN_errors(t *testing.T) {
+	t.Parallel()
 	t.Run("queryError", func(t *testing.T) {
+		t.Parallel()
 		mock, err := pgxmock.NewPool()
 		if err != nil {
 			t.Fatal(err)
@@ -117,6 +122,7 @@ func TestClient_ReserveN_errors(t *testing.T) {
 		}
 	})
 	t.Run("scanError", func(t *testing.T) {
+		t.Parallel()
 		mock, err := pgxmock.NewPool()
 		if err != nil {
 			t.Fatal(err)
@@ -136,6 +142,7 @@ func TestClient_ReserveN_errors(t *testing.T) {
 }
 
 func TestClient_ReleaseN_errors(t *testing.T) {
+	t.Parallel()
 	mock, err := pgxmock.NewPool()
 	if err != nil {
 		t.Fatal(err)
@@ -154,6 +161,7 @@ func TestClient_ReleaseN_errors(t *testing.T) {
 }
 
 func TestClient_ExtendN_errors(t *testing.T) {
+	t.Parallel()
 	mock, err := pgxmock.NewPool()
 	if err != nil {
 		t.Fatal(err)
@@ -172,6 +180,7 @@ func TestClient_ExtendN_errors(t *testing.T) {
 }
 
 func TestClient_DeleteN_errors(t *testing.T) {
+	t.Parallel()
 	mock, err := pgxmock.NewPool()
 	if err != nil {
 		t.Fatal(err)
@@ -190,6 +199,7 @@ func TestClient_DeleteN_errors(t *testing.T) {
 }
 
 func TestClient_PurgeN_errors(t *testing.T) {
+	t.Parallel()
 	mock, err := pgxmock.NewPool()
 	if err != nil {
 		t.Fatal(err)
@@ -208,7 +218,9 @@ func TestClient_PurgeN_errors(t *testing.T) {
 }
 
 func TestClient_PopN_errors(t *testing.T) {
+	t.Parallel()
 	t.Run("queryError", func(t *testing.T) {
+		t.Parallel()
 		mock, err := pgxmock.NewPool()
 		if err != nil {
 			t.Fatal(err)
@@ -226,6 +238,7 @@ func TestClient_PopN_errors(t *testing.T) {
 		}
 	})
 	t.Run("scanError", func(t *testing.T) {
+		t.Parallel()
 		mock, err := pgxmock.NewPool()
 		if err != nil {
 			t.Fatal(err)
