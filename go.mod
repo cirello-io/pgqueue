@@ -4,7 +4,7 @@ go 1.22.5
 
 require (
 	github.com/jackc/pgx/v5 v5.7.1
-	github.com/pashagolub/pgxmock/v4 v4.2.0
+	github.com/pashagolub/pgxmock/v4 v4.3.0
 	golang.org/x/sync v0.8.0
 )
 
