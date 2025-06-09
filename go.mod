@@ -7,7 +7,7 @@ toolchain go1.24.1
 require (
 	github.com/jackc/pgx/v5 v5.7.5
 	github.com/pashagolub/pgxmock/v4 v4.7.0
-	golang.org/x/sync v0.14.0
+	golang.org/x/sync v0.15.0
 )
 
 require (
