@@ -264,7 +264,7 @@ func TestClient_DumpDeadLetterQueue_errors(t *testing.T) {
 		}
 		errExpected := errors.New("mock error")
 		mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
-			WillReturnRows(pgxmock.NewRows([]string{"id", "content"}).RowError(0, errExpected))
+			WillReturnRows(pgxmock.NewRows([]string{"id", "content"}).CloseError(errExpected))
 		ctx := context.Background()
 		client := Open(mock, EnableDeadLetterQueue())
 		defer client.Close()
