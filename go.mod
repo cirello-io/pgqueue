@@ -4,7 +4,7 @@ go 1.27.3
 
 require (
 	github.com/jackc/pgx/v5 v5.12.0
-	golang.org/x/sync v0.24.0
+	golang.org/x/sync v0.25.0
 )
 
 require (
